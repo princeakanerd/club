@@ -1,3 +1,0 @@
-const testcontroller = (req, res) => {
-    
-}
