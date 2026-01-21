@@ -78,11 +78,17 @@ const userSchema = new Schema(
     }
 )
 
-userSchema.pre("save", async function(next){
-    if(this.isModified("password")) {
-        this.password = await bcrypt.hash(this.password, 10);
+userSchema.pre("save", async function(){
+    // console.log("1. Pre-save hook started"); // Debug Log
+
+    if(!this.isModified("password")) {
+        return next();
     }
-    next();
+
+    // console.log("2. Password modified. Hashing now..."); // Debug Log
+    this.password = await bcrypt.hash(this.password, 10);
+    
+    // console.log("3. Hashing done. Calling next()"); // Debug Log
 })
 
 userSchema.methods.isPasswordCorrect = async function(password){

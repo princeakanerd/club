@@ -2,84 +2,99 @@ import { User } from "../models/user.models.js";
 import { ApiError } from "../utils/ApiError.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { ApiResponse } from "../utils/ApiResponse.js";
-import {uploadOnCloudinary} from "../utils/cloudinary.js"
+import { uploadOnCloudinary } from "../utils/cloudinary.js";
 
-const registerUser = asyncHandler(async(res, res) => {
-    //Fetch fullName, email , username, password from req.body
-    //Validate if fields are empty
-    // Check if somebody with that email already exists
-    const {fullName, email, username, password} = req.body ;
+const registerUser = asyncHandler(async (req, res) => {
+  //Fetch fullName, email , username, password from req.body
+  //Validate if fields are empty
+  // Check if somebody with that email already exists
+  // If everything is fine now fetch local file path for avatar and CovImg
+  // UPload them on cloudinary
+  // now create the db object
+  //Get and return the sanitised user
 
+  const { fullName, email, username, password, rollNumber, batchYear } =
+    req.body;
 
-    if([fullName, email, username, password].some((field) => field?.trim() === "")) {
-        throw new ApiError(400, "All fields are required") ;
-    }
+  if (
+    [fullName, email, username, password, rollNumber, batchYear].some(
+      (field) => field?.trim() === ""
+    )
+  ) {
+    throw new ApiError(400, "All fields are required");
+  }
 
-    const existedUser = await User.findOne(
-        {
-            //checks if the user with this email or username exists 
-            $or: [{username}, {email}]
-        }
-    );
+  const existedUser = await User.findOne({
+    //checks if the user with this email or username exists
+    $or: [{ username }, { email }],
+  });
 
-    if(existedUser) {
-        throw new ApiError(409, "User with email or username already exists" ) ;
-    }
+  if (existedUser) {
+    throw new ApiError(409, "User with email or username already exists");
+  }
 
-    //File handling
+  //File handling
 
-    //req.files is injected by multer middleware ( which is setup in the routes ) ;
-    const avatarLocalPath = req.files?.avatar[0]?.path ;
-    
-    let coverImageLocalPath ;
-    //It might not exist as its not compulsory
+  //req.files is injected by multer middleware ( which is setup in the routes ) ;
+  const avatarLocalPath = req.files?.avatar[0]?.path;
 
-    if(req.files && Array.isArray(req.files.coverImage) && req.files.coverImage.length > 0){
-        coverImageLocalPath = req.files.coverImage[0].path;
-    }
+  let coverImageLocalPath;
+  //It might not exist as its not compulsory
 
-    if(!avatarLocalPath){
-        throw new ApiError(400, "Avatar file is required") ;
-    }
-    //Upload to cloudinary
+  if (
+    req.files &&
+    Array.isArray(req.files.coverImage) &&
+    req.files.coverImage.length > 0
+  ) {
+    coverImageLocalPath = req.files.coverImage[0].path;
+  }
 
+  if (!avatarLocalPath) {
+    throw new ApiError(400, "Avatar file is required");
+  }
+  //Upload to cloudinary
 
-    const avatar = await uploadOnCloudinary(avatarLocalPath) ;
-    const coverImage = await uploadOnCloudinary(coverImageLocalPath) ;
+  const avatar = await uploadOnCloudinary(avatarLocalPath);
+  const coverImage = await uploadOnCloudinary(coverImageLocalPath);
+  console.log(avatar);
 
-    if(!avatar) {
-        throw new ApiError(400, "Avatar upload to cloudinary failed") ;
-    }
+  if (!avatar) {
+    throw new ApiError(400, "Avatar upload to cloudinary failed");
+  }
+  console.log("Hi 0");
 
-    //Create user Object in db
+  //Create user Object in db
 
-    const user = await User.create({
-        fullName, 
-        avatar : avatar.url ,// WE save only the string and not the complete object
-        coverImage : coverImage?.url || "",
-        email,
-        password,
-        username: username.toLowerCase()
-    });
+  const user = await User.create({
+    fullName,
+    avatar: avatar.url, // WE save only the string and not the complete object
+    coverImage: coverImage?.url || "",
+    email,
+    password,
+    username: username.toLowerCase(),
+    rollNumber,
+    batchYear,
+  });
 
-    //Sanitised user
-    const createdUser = await User.findById(user._id).select(
-        "-password -refreshToken"
-    );
+  console.log("Hi 1");
 
-    if(!createdUser) {
-        throw new ApiError(400, "Something went wrong while registering the User") ;
-    }
+  //Sanitised user
+  const createdUser = await User.findById(user._id).select(
+    "-password -refreshToken"
+  );
 
-    return res
-            .status(201)
-            .json(
-                new ApiResponse(200, createdUser, "User Registered succesfully")
-            );
-        //TODO: Implemented register and login controllers, Now test these controllers
+  console.log("Hi 2");
 
+  if (!createdUser) {
+    throw new ApiError(400, "Something went wrong while registering the User");
+  }
+  console.log("Hi 3");
 
-})
+  return res
+    .status(201)
+    .json(new ApiResponse(200, createdUser, "User Registered succesfully"));
+
+  });
 const loginUser = asyncHandler(async (req, res) => {
   // steps
 
@@ -111,8 +126,8 @@ const loginUser = asyncHandler(async (req, res) => {
 
   //Generate our tokens
 
-  const accessToken = user.generateAccessToken();
-  const refreshToken = user.generateRefreshToken();
+  const accessToken = await user.generateAccessToken();
+  const refreshToken = await user.generateRefreshToken();
 
   //Attaching the refreshToken field
   user.refreshToken = refreshToken;
@@ -147,6 +162,4 @@ const loginUser = asyncHandler(async (req, res) => {
     );
 });
 
-
-
-export { loginUser };
+export { loginUser, registerUser };

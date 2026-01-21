@@ -8,7 +8,10 @@ app.use(express.urlencoded({ extended: true, limit: "16kb" }));
 app.use(express.static("public"));
 app.use(cookieParser()) ;
 
+app.use("/api/v1/users", userRouter) ;
 app.use("/", (req, res) => {
     res.send("<h1>Server is running!</h1><p>Go to /api/v1/users (or your specific route) to test the API.</p>");
 });
+
+
 export default app ;
