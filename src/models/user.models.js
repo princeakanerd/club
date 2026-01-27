@@ -82,7 +82,7 @@ userSchema.pre("save", async function(){
     // console.log("1. Pre-save hook started"); // Debug Log
 
     if(!this.isModified("password")) {
-        return next();
+        return ;
     }
 
     // console.log("2. Password modified. Hashing now..."); // Debug Log
@@ -109,7 +109,7 @@ userSchema.methods.generateAccessToken = function(){
 )
 }
 
-userSchema.methods.generateRefreshToken = async function() {
+userSchema.methods.generateRefreshToken = function() {
     return jwt.sign({
         _id : this._id
     },

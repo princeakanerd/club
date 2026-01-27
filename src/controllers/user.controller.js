@@ -4,7 +4,7 @@ import { asyncHandler } from "../utils/asyncHandler.js";
 import { ApiResponse } from "../utils/ApiResponse.js";
 import { uploadOnCloudinary } from "../utils/cloudinary.js";
 
-const registerUser = asyncHandler(async (req, res) => {
+const registerUser = asyncHandler(async (req, res, next) => {
   //Fetch fullName, email , username, password from req.body
   //Validate if fields are empty
   // Check if somebody with that email already exists
@@ -94,8 +94,9 @@ const registerUser = asyncHandler(async (req, res) => {
     .status(201)
     .json(new ApiResponse(200, createdUser, "User Registered succesfully"));
 
-  });
-const loginUser = asyncHandler(async (req, res) => {
+});
+
+const loginUser = asyncHandler(async (req, res, next) => {
   // steps
 
   //req.body se email and password lo
@@ -162,4 +163,91 @@ const loginUser = asyncHandler(async (req, res) => {
     );
 });
 
-export { loginUser, registerUser };
+const logoutUser = asyncHandler(async (req, res) => {
+
+      // I need to find ki konse user ko logout karna hai so we already have req.user which was set by our auth.middleware verifyJWT function
+      // As we have the user so as its logging out we'll remove the refreshToken field from the DB for this uer
+
+      await User.findByIdAndUpdate(req.user._id,
+        {
+          $unset: {
+            //This 1 acts as a boolean flag 
+            refreshToken: 1
+          }
+        },
+        {
+          //This new: true ki wjh se it returns us the document after the changes have been applied
+          new : true
+        }
+      );
+      //Instead of removing this refreshToken we could have just set it to null, But it would consume faltu ki space and also if we are indexing the refreshToken then unnecessarily many entries will be null
+
+      //These options must match the options used during login
+      const options = {
+        httpOnly : true,
+        secure : true,
+      }
+
+      return res
+      .status(200)
+      .clearCookie("accessToken", options)
+      .clearCookie("refreshToken", options)
+      .json(new ApiResponse(200, {}, "User loggedout Succesfully")) ;
+
+})
+
+const refreshAccessToken = asyncHandler(async (req, res) => {
+    //Incase the accessToken expires we generate a new one using the refreshToken in the db
+
+    const incomingRefreshToken = req.cookies.refreshToken || req.body.refreshToken ;
+
+    if(!incomingRefreshToken){
+        throw new ApiError(401, "Unauthorised request") ;
+    }
+
+    try {
+          const decodedToken = jwt.verify(incomingRefreshToken, process.env.REFRESH_TOKEN_SECRET) ;
+          const user = await User.findById(decodedToken?._id) ;
+
+          if(!user){
+            throw new ApiError(401, "Invalid refresh Token") ;
+          }
+
+          if(incomingRefreshToken != user?.refreshToken){
+            throw new ApiError(401, "RefreshToken is expired or used") ;
+          }
+
+          const accessToken = user.generateAccessToken() ;
+          const newRefreshToken = user.generateRefreshToken() ;
+
+          user.refreshToken = newRefreshToken ;
+          await user.save({validateBeforeSave: false}) ;
+
+          const options = {
+            httpOnly: true,
+            secure : true
+          }
+
+          return res
+          .status(200)
+          .cookie("accessToken", accessToken, options)
+          .cookie("refreshToken", newRefreshToken, options) 
+          .json(
+            new ApiResponse(200, 
+              {
+                accessToken, refreshToken: newRefreshToken
+              }, "AccessToken Refreshed"
+            )
+          )
+
+
+    } catch (error) {
+      throw new ApiError(401, error?.message || "Invalid RefreshToken") ;
+    }
+
+
+})
+
+// TODO: Change password controller
+
+export { loginUser, registerUser, logoutUser, refreshAccessToken };
