@@ -61,8 +61,7 @@ const registerUser = asyncHandler(async (req, res, next) => {
   if (!avatar) {
     throw new ApiError(400, "Avatar upload to cloudinary failed");
   }
-  console.log("Hi 0");
-
+  // console.log("Hi 0");
   //Create user Object in db
 
   const user = await User.create({
@@ -76,19 +75,19 @@ const registerUser = asyncHandler(async (req, res, next) => {
     batchYear,
   });
 
-  console.log("Hi 1");
+  // console.log("Hi 1");
 
   //Sanitised user
   const createdUser = await User.findById(user._id).select(
     "-password -refreshToken"
   );
 
-  console.log("Hi 2");
+  // console.log("Hi 2");
 
   if (!createdUser) {
     throw new ApiError(400, "Something went wrong while registering the User");
   }
-  console.log("Hi 3");
+  // console.log("Hi 3");
 
   return res
     .status(201)
@@ -248,6 +247,71 @@ const refreshAccessToken = asyncHandler(async (req, res) => {
 
 })
 
-// TODO: Change password controller
+const changeCurrentPassword = asyncHandler(async(req, res) => {
+  // steps 
 
-export { loginUser, registerUser, logoutUser, refreshAccessToken };
+  //extract new and old password
+  //now req.user doesnt have the password field so I need to fetch that password from Db using User.findbyId(), I have id from req.user
+
+  //Validate the password using ispasswordCorrect(oldpassword)
+  //If password is correct update the newpassword
+  // hash and store in db
+
+  const {oldPassword, newPassword} = req.body ;
+  if(!oldPassword || !newPassword) {
+    throw new ApiError(400, "Both new and old Passwords are required") ;
+  }
+
+  const user = await User.findById(req.user._id) ;
+
+  const ispasswordCorrect = await user.isPasswordCorrect(oldPassword) ;
+  if(!ispasswordCorrect) {
+    throw new ApiError(400, "Invalid old password") ;
+  }
+
+  user.password = newPassword
+
+  // save to db only after hashing
+
+  await user.save({validateBeforeSave : false}) ;
+
+  return res
+        .status(200)
+        .json(new ApiResponse(200, {}, "Password changed Succesfully")) ;
+
+})
+
+const getCurrentUser = asyncHandler((req, res) => {
+  //This will be triggered after the verifyJWT middleware so we already have req.user
+
+  return res
+        .status(200)
+        .json(new ApiResponse(200, req.user, "Current user Fetched Succesfully")) ;
+})
+
+const updateAccountDetails = asyncHandler(async (req, res ) => {
+  const {fullName, email} = req.body ;
+
+  if(!fullName || !email){
+    throw new ApiError(400, "All fields are required") ;
+  }
+
+  const user = await User.findByIdAndUpdate(req.user._id, 
+    {
+      $set: {
+        fullName: fullName,
+        email: email
+      }
+    }, {
+      new: true,
+      runValidators: true
+    }
+  ).select("-password -refreshToken");
+  return res
+        .status(200)
+        .json(new ApiResponse(200, user, "Account details updated")) ;
+})
+
+// TODO: Update User avatar
+
+export { loginUser, registerUser, logoutUser, refreshAccessToken, changeCurrentPassword, getCurrentUser, updateAccountDetails};
