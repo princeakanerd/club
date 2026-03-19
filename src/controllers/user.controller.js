@@ -2,7 +2,8 @@ import { User } from "../models/user.models.js";
 import { ApiError } from "../utils/ApiError.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { ApiResponse } from "../utils/ApiResponse.js";
-import { uploadOnCloudinary } from "../utils/cloudinary.js";
+import { deleteFromCloudinary, uploadOnCloudinary } from "../utils/cloudinary.js";
+import { upload } from "../middlewares/multer.middleware.js";
 
 const registerUser = asyncHandler(async (req, res, next) => {
   //Fetch fullName, email , username, password from req.body
@@ -312,6 +313,47 @@ const updateAccountDetails = asyncHandler(async (req, res ) => {
         .json(new ApiResponse(200, user, "Account details updated")) ;
 })
 
-// TODO: Update User avatar
+const updateUserAvatar = asyncHandler(async(req, res) => {
+  //WE are expecting a single file and not an array or smth, or else we would have done files[0].path
+  const avatarLocalPath = req.file?.path ;
+
+  if(!avatarLocalPath) {
+    throw new ApiError(400, "Avatar file is missing") ;
+  }
+
+  // Now we'll upload this file to cloudinary
+
+  const avatar = await uploadOnCloudinary(avatarLocalPath) ;
+  if(!avatar.url){
+    throw new ApiError(400, "Error while uploading on cloudinary") ;
+  }
+
+  // retrieve old avatar url
+
+  const currentUser = await User.findbyId(req.user._id) ;
+  const oldAvatarUrl = currentUser.avatar ;
+
+  const user = await User.findByIdAndUpdate(
+    req.user._id,
+    {
+      $set: {
+        avatar: avatar.url
+      }
+    }, 
+    {new : true}
+  ).select("-password -refreshToken");
+
+  if(oldAvatarUrl){
+      await deleteFromCloudinary(oldAvatarUrl) ;
+  }
+
+  return res
+        .status(200)
+        .json(new ApiResponse(200, user, "Avatar updated!")) ;
+
+
+})
+
+// TODO: Test updateAvatar Controller
 
 export { loginUser, registerUser, logoutUser, refreshAccessToken, changeCurrentPassword, getCurrentUser, updateAccountDetails};
