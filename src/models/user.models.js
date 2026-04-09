@@ -29,6 +29,9 @@ const userSchema = new Schema(
             type : String, // This will be the cloudinary URL
             required : true
         },
+        coverImage: {
+            type: String, // This will be the cloudinary URL
+        },
         batchYear : {
             type : Number ,
             required : true,
