@@ -1,0 +1,32 @@
+{
+  "version": "v1",
+  "generated_utc": "2026-05-08T10:13:52Z",
+  "release_summary": {
+    "catalog": [],
+    "current_release": {},
+    "next_release": {},
+    "summary": {
+      "release_count": 0,
+      "alias_count": 0,
+      "active_assignment_count": 0
+    }
+  },
+  "current_workstreams_by_window": {
+    "24h": [],
+    "48h": []
+  },
+  "current_workstreams": [],
+  "workstream_catalog": [],
+  "verified_scoped_workstreams": {
+    "24h": [],
+    "48h": []
+  },
+  "promoted_scoped_workstreams": {
+    "24h": [],
+    "48h": []
+  },
+  "window_scope_signals": {
+    "24h": {},
+    "48h": {}
+  }
+}

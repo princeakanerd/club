@@ -1,0 +1,1 @@
+window["__ODYLITH_BACKLOG_STANDALONE_MANIFEST__"] = {};

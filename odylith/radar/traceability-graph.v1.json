@@ -1,0 +1,61 @@
+{
+  "version": "v1",
+  "source": {
+    "ideas_root": "odylith/radar/source/ideas",
+    "catalog": "odylith/atlas/source/catalog/diagrams.v1.json",
+    "execution_programs_root": "odylith/radar/source/programs",
+    "release_planning_root": "odylith/radar/source/releases"
+  },
+  "workstreams": [],
+  "releases": [],
+  "release_aliases": {},
+  "current_release": {},
+  "next_release": {},
+  "release_summary": {
+    "release_count": 0,
+    "alias_count": 0,
+    "active_assignment_count": 0
+  },
+  "execution_programs": [],
+  "nodes": [],
+  "edges": [],
+  "coverage": {},
+  "warning_items": [],
+  "warnings": [],
+  "topology_integrity": {
+    "version": "v1",
+    "algorithm": "multipartite-spine-v1",
+    "complexity": "O(V+E)",
+    "quality": "pass",
+    "score": 100,
+    "severity_counts": {
+      "error": 0,
+      "warning": 0,
+      "info": 0
+    },
+    "connectivity": {
+      "spine_node_count": 0,
+      "structural_edge_count": 0,
+      "connected_component_count": 0,
+      "largest_component_size": 0,
+      "isolated_node_count": 0,
+      "isolated_nodes": []
+    },
+    "findings": []
+  },
+  "summary": {
+    "workstream_count": 0,
+    "release_count": 0,
+    "component_count": 0,
+    "active_release_assignment_count": 0,
+    "execution_program_count": 0,
+    "execution_wave_count": 0,
+    "node_count": 0,
+    "edge_count": 0,
+    "warning_count": 0,
+    "warning_item_count": 0,
+    "topology_quality": "pass",
+    "topology_score": 100
+  },
+  "generated_utc": "2026-05-08 10:13:51Z"
+}

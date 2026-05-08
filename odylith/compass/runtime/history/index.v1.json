@@ -1,0 +1,17 @@
+{
+  "version": "v1",
+  "generated_utc": "2026-05-08T10:13:52Z",
+  "retention_days": 15,
+  "dates": [
+    "2026-05-08"
+  ],
+  "restored_dates": [],
+  "archive": {
+    "compressed": false,
+    "path": "",
+    "count": 0,
+    "dates": [],
+    "newest_date": "",
+    "oldest_date": ""
+  }
+}
