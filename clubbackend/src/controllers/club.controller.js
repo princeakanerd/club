@@ -9,13 +9,14 @@ import mongoose from "mongoose";
 const createClub = asyncHandler(async (req, res) => {
     // 1. Extract text payload
     const { name, description, category, contactEmail } = req.body;
-
+    
     if (!name || !description || !category) {
         throw new ApiError(400, "Name, description, and category are required");
     }
-
     // 2. Prevent duplicate clubs
+    
     const existingClub = await Club.findOne({ name });
+    
     if (existingClub) {
         throw new ApiError(409, "A club with this exact name already exists");
     }

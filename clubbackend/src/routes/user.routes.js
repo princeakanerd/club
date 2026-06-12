@@ -1,9 +1,9 @@
 import { Router } from "express";
-import {upload} from "../middlewares/multer.middleware.js"
+import { upload } from "../middlewares/multer.middleware.js"
 import { loginUser, registerUser, logoutUser, changeCurrentPassword, getCurrentUser, updateAccountDetails, updateUserAvatar, updateUserCoverImage } from "../controllers/user.controller.js";
 import { verifyJWT } from "../middlewares/auth.middleware.js";
 
-const router = Router() ;
+const router = Router();
 
 router.route("/register").post(
     //Middleware to handle files
@@ -22,21 +22,21 @@ router.route("/register").post(
     registerUser
 )
 
-router.route("/login").post(loginUser) ;
+router.route("/login").post(loginUser);
 //Protected Routes
 router.route("/logout").post(verifyJWT, logoutUser);
-router.route("/change-password").post(verifyJWT, changeCurrentPassword) ;
-router.route("/current-user").get(verifyJWT, getCurrentUser) ;
+router.route("/change-password").post(verifyJWT, changeCurrentPassword);
+router.route("/current-user").get(verifyJWT, getCurrentUser);
 router.route("/update-account").patch(verifyJWT, updateAccountDetails);
 router.route("/avatar").patch(
-    verifyJWT, 
+    verifyJWT,
     upload.single("avatar"), // <-- Multer intercepts the file here
-    updateUserAvatar 
+    updateUserAvatar
 );
 router.route("/cover-image").patch(
-    verifyJWT, 
-    upload.single("coverImage"), 
+    verifyJWT,
+    upload.single("coverImage"),
     updateUserCoverImage
 );
 
-export default router ;
+export default router;

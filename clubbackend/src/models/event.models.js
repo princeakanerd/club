@@ -40,11 +40,18 @@ const eventSchema = new Schema(
             ref: "User",
             required: true
         },
-        // Relational Data: Who is coming? (RSVP List)
-        attendees: [
+        // Relational Data: Who is coming? (RSVP Poll)
+        rsvp: [
             {
-                type: Schema.Types.ObjectId,
-                ref: "User"
+                user: {
+                    type: Schema.Types.ObjectId,
+                    ref: "User"
+                },
+                status: {
+                    type: String,
+                    enum: ["GOING", "NOT_GOING", "MAYBE"],
+                    default: "GOING"
+                }
             }
         ]
     },

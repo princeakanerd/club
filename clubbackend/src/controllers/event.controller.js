@@ -78,7 +78,7 @@ const getClubEvents = asyncHandler(async (req, res) => {
         hostedBy: clubId,
         isPublished: true // Strict filter: Do not return draft events to the public feed
     })
-    .select("-attendees") // Project out the attendees array to save bandwidth; the general feed doesn't need the full user list
+    .select("-rsvp") // Project out the rsvp array to save bandwidth
     .sort({ eventDate: 1 }); // Sort by eventDate ascending (1), so the soonest upcoming events appear at the top of the array
 
     // 3. Return the array of events
@@ -87,11 +87,16 @@ const getClubEvents = asyncHandler(async (req, res) => {
         .json(new ApiResponse(200, events, "Club events fetched successfully"));
 });
 const rsvpToEvent = asyncHandler(async (req, res) => {
-    // 1. Extract and validate the eventId
+    // 1. Extract and validate the eventId and status
     const { eventId } = req.params;
+    const { status } = req.body;
 
     if (!mongoose.isValidObjectId(eventId)) {
         throw new ApiError(400, "Invalid Event ID format");
+    }
+
+    if (!["GOING", "NOT_GOING", "MAYBE"].includes(status)) {
+        throw new ApiError(400, "Invalid RSVP status. Must be GOING, NOT_GOING, or MAYBE.");
     }
 
     // 2. Verify the event actually exists
@@ -101,24 +106,20 @@ const rsvpToEvent = asyncHandler(async (req, res) => {
         throw new ApiError(404, "Event not found");
     }
 
-    // 3. Execute the Database Update using $addToSet
-    // $addToSet behaves like $push, but mathematically guarantees uniqueness. 
-    // If the req.user._id already exists in the attendees array, MongoDB silently ignores the query.
-    const updatedEvent = await Event.findByIdAndUpdate(
-        eventId,
-        {
-            $addToSet: {
-                attendees: req.user._id
-            }
-        },
-        { new: true }
-    );
+    // 3. Update or Add RSVP
+    const existingRsvpIndex = event.rsvp.findIndex(r => r.user.toString() === req.user._id.toString());
+    
+    if (existingRsvpIndex > -1) {
+        event.rsvp[existingRsvpIndex].status = status;
+    } else {
+        event.rsvp.push({ user: req.user._id, status });
+    }
 
-    // 4. Return success response
-    // We do not return the full updatedEvent to the client to save bandwidth, just a success confirmation.
+    await event.save();
+
     return res
         .status(200)
-        .json(new ApiResponse(200, {}, "Successfully RSVP'd to the event"));
+        .json(new ApiResponse(200, {}, `Successfully RSVP'd as ${status}`));
 });
 
 const getEventAttendees = asyncHandler(async (req, res) => {
@@ -129,11 +130,9 @@ const getEventAttendees = asyncHandler(async (req, res) => {
         throw new ApiError(400, "Invalid Event ID format");
     }
 
-    // 2. Fetch the event and hydrate the attendees array
-    // We use .populate() to dynamically replace the raw ObjectIds in the attendees array with the actual User documents.
-    // We strictly project only the necessary fields to prevent leaking passwords or refresh tokens.
+    // 2. Fetch the event and hydrate the rsvp array
     const event = await Event.findById(eventId).populate(
-        "attendees",
+        "rsvp.user",
         "fullName username email avatar"
     );
 
@@ -142,15 +141,14 @@ const getEventAttendees = asyncHandler(async (req, res) => {
     }
 
     // 3. Authorization (RBAC)
-    // We compare the currently logged-in user's ID against the event's 'createdBy' property.
     if (event.createdBy.toString() !== req.user._id.toString()) {
         throw new ApiError(403, "Forbidden: Only the event creator can view the attendee roster");
     }
 
-    // 4. Return the populated attendees array directly
+    // 4. Return the populated rsvp array
     return res
         .status(200)
-        .json(new ApiResponse(200, event.attendees, "Event attendees fetched successfully"));
+        .json(new ApiResponse(200, event.rsvp, "Event RSVP list fetched successfully"));
 });
 
 const updateEventDetails = asyncHandler(async (req, res) => {
@@ -234,19 +232,22 @@ const deleteEvent = asyncHandler(async (req, res) => {
 });
 
 const getMyUpcomingEvents = asyncHandler(async (req, res) => {
-    // 1. Execute the Database Read Operation
-    // We query the Event collection to find any event where the user's ID exists inside the attendees array.
+    // We query the Event collection to find any event where the user RSVP'd as GOING or MAYBE
     const upcomingEvents = await Event.find({
-        attendees: req.user._id, // MongoDB automatically scans arrays for a matching value
+        "rsvp": {
+            $elemMatch: {
+                user: req.user._id,
+                status: { $in: ["GOING", "MAYBE"] }
+            }
+        },
         eventDate: {
-            $gte: new Date() // Strict Time Filter: Only return events happening NOW or in the FUTURE
+            $gte: new Date()
         }
     })
-    .populate("hostedBy", "name logo category") // Hydrate the club data so the frontend can show the club's name and logo on the event card
-    .select("-attendees") // Strip the attendee array to protect privacy and save bandwidth
-    .sort({ eventDate: 1 }); // 1 = Ascending order (closest events appear first)
+    .populate("hostedBy", "name logo category")
+    .select("-rsvp") 
+    .sort({ eventDate: 1 });
 
-    // 2. Return the personalized feed
     return res
         .status(200)
         .json(new ApiResponse(200, upcomingEvents, "User's upcoming events fetched successfully"));
