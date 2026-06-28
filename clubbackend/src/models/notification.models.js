@@ -14,7 +14,7 @@ const notificationSchema = new Schema(
         },
         type: {
             type: String,
-            enum: ["EVENT_INVITE", "REMINDER", "ANNOUNCEMENT", "CLUB_UPDATE"],
+            enum: ["EVENT_INVITE", "REMINDER", "ANNOUNCEMENT", "CLUB_UPDATE", "CONNECTION_REQUEST", "CONNECTION_ACCEPTED"],
             required: true
         },
         // Optional link to the event this notification is about
@@ -26,6 +26,11 @@ const notificationSchema = new Schema(
         relatedClub: {
             type: Schema.Types.ObjectId,
             ref: "Club"
+        },
+        // Optional link to a user (for connection requests)
+        relatedUser: {
+            type: Schema.Types.ObjectId,
+            ref: "User"
         },
         isRead: {
             type: Boolean,

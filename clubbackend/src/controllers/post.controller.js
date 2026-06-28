@@ -18,9 +18,15 @@ const createPost = asyncHandler(async (req, res) => {
         throw new ApiError(404, "Club not found");
     }
 
-    // Only creator/leads should be able to post. Assuming createdBy is lead.
-    if (club.createdBy.toString() !== req.user._id.toString()) {
-        throw new ApiError(403, "Only the club lead can create posts");
+    // Creator, LEAD, or EXECUTIVE may post on behalf of the club
+    const membership = (req.user.joinedClubs || []).find(
+        m => m.club.toString() === clubId
+    );
+    const isAuthorised =
+        club.createdBy.toString() === req.user._id.toString() ||
+        (membership && ["LEAD", "EXECUTIVE"].includes(membership.role));
+    if (!isAuthorised) {
+        throw new ApiError(403, "Only the club lead or executives can create posts");
     }
 
     const imageLocalPath = req.file?.path;
@@ -110,4 +116,34 @@ const addComment = asyncHandler(async (req, res) => {
     return res.status(201).json(new ApiResponse(201, post.comments[post.comments.length - 1], "Comment added"));
 });
 
-export { createPost, getClubPosts, likePost, addComment };
+const deletePost = asyncHandler(async (req, res) => {
+    const { postId } = req.params;
+
+    if (!mongoose.isValidObjectId(postId)) {
+        throw new ApiError(400, "Invalid Post ID format");
+    }
+
+    const post = await Post.findById(postId);
+    if (!post) {
+        throw new ApiError(404, "Post not found");
+    }
+
+    // Author can delete their own post; club LEAD/EXECUTIVE can moderate
+    const club = await Club.findById(post.club);
+    const membership = (req.user.joinedClubs || []).find(
+        m => m.club.toString() === post.club.toString()
+    );
+    const canDelete =
+        post.author.toString() === req.user._id.toString() ||
+        (club && club.createdBy.toString() === req.user._id.toString()) ||
+        (membership && ["LEAD", "EXECUTIVE"].includes(membership.role));
+    if (!canDelete) {
+        throw new ApiError(403, "Forbidden: You cannot delete this post");
+    }
+
+    await Post.findByIdAndDelete(postId);
+
+    return res.status(200).json(new ApiResponse(200, {}, "Post deleted successfully"));
+});
+
+export { createPost, getClubPosts, likePost, addComment, deletePost };

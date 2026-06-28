@@ -32,7 +32,7 @@ const registerUser = asyncHandler(async (req, res) => {
   }
 
   // 4. Extract the local file path for the avatar (populated by Multer middleware)
-  const avatarLocalPath = req.files?.avatar[0]?.path;
+  const avatarLocalPath = req.files?.avatar?.[0]?.path;
 
   if (!avatarLocalPath) {
       throw new ApiError(400, "Avatar file is required for registration");
@@ -372,6 +372,25 @@ const updateUserCoverImage = asyncHandler(async (req, res) => {
 
 
 
+const updateUserProfile = asyncHandler(async (req, res) => {
+    const { bio, interests } = req.body;
+    const update = {};
+    if (bio !== undefined) update.bio = bio.trim().slice(0, 250);
+    if (interests !== undefined) {
+        // Accept comma-separated string or array
+        const arr = Array.isArray(interests)
+            ? interests
+            : interests.split(",").map(s => s.trim()).filter(Boolean);
+        update.interests = arr.slice(0, 10);
+    }
+    const user = await User.findByIdAndUpdate(
+        req.user._id,
+        { $set: update },
+        { new: true }
+    ).select("-password -refreshToken");
+    return res.status(200).json(new ApiResponse(200, user, "Profile updated"));
+});
+
 export {
   loginUser,
   registerUser,
@@ -381,5 +400,6 @@ export {
   getCurrentUser,
   updateAccountDetails,
   updateUserAvatar,
-  updateUserCoverImage
+  updateUserCoverImage,
+  updateUserProfile
 };

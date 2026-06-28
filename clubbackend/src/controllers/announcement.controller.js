@@ -26,10 +26,14 @@ const createAnnouncement = asyncHandler(async (req, res) => {
         throw new ApiError(404, "Club not found");
     }
 
-    // 3. Authorization (RBAC)
-    // Strictly enforce that only the club creator can broadcast announcements
-    if (club.createdBy.toString() !== req.user._id.toString()) {
-        throw new ApiError(403, "Forbidden: Only the club LEAD can post announcements");
+    // 3. Authorization — LEAD (creator) or EXECUTIVE can post announcements
+    const membership = req.user.joinedClubs.find(m => m.club.toString() === clubId);
+    const isAuthorised =
+        club.createdBy.toString() === req.user._id.toString() ||
+        (membership && ["LEAD", "EXECUTIVE"].includes(membership.role));
+
+    if (!isAuthorised) {
+        throw new ApiError(403, "Forbidden: Only club LEAD or EXECUTIVE can post announcements");
     }
 
     // 4. Create the Announcement document

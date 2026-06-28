@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { upload } from "../middlewares/multer.middleware.js"
-import { loginUser, registerUser, logoutUser, changeCurrentPassword, getCurrentUser, updateAccountDetails, updateUserAvatar, updateUserCoverImage } from "../controllers/user.controller.js";
+import { loginUser, registerUser, logoutUser, changeCurrentPassword, getCurrentUser, updateAccountDetails, updateUserAvatar, updateUserCoverImage, updateUserProfile } from "../controllers/user.controller.js";
 import { verifyJWT } from "../middlewares/auth.middleware.js";
 
 const router = Router();
@@ -38,5 +38,6 @@ router.route("/cover-image").patch(
     upload.single("coverImage"),
     updateUserCoverImage
 );
+router.route("/profile").patch(verifyJWT, updateUserProfile);
 
 export default router;

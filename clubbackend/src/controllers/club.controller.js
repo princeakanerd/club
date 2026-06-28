@@ -83,12 +83,29 @@ const getAllClubs = asyncHandler(async (req, res) => {
         dbQuery.name = { $regex: search, $options: "i" }; 
     }
 
-    // 4. Execute the database search
-    const clubs = await Club.find(dbQuery)
-        .populate("createdBy", "fullName username avatar") // Replaces the creator's ID with their actual profile data
-        .sort({ createdAt: -1 }); // Sorts the array so the newest clubs appear first
+    // Use aggregation to include member count
+    const clubs = await Club.aggregate([
+        { $match: dbQuery },
+        {
+            $lookup: {
+                from: "users",
+                let: { clubId: "$_id" },
+                pipeline: [
+                    { $match: { $expr: { $in: ["$$clubId", "$joinedClubs.club"] } } },
+                    { $count: "count" }
+                ],
+                as: "memberData"
+            }
+        },
+        {
+            $addFields: {
+                memberCount: { $ifNull: [{ $arrayElemAt: ["$memberData.count", 0] }, 0] }
+            }
+        },
+        { $unset: "memberData" },
+        { $sort: { createdAt: -1 } }
+    ]);
 
-    // 5. Return the array of clubs
     return res
         .status(200)
         .json(new ApiResponse(200, clubs, "Clubs fetched successfully"));
@@ -333,50 +350,46 @@ const getMyClubs = asyncHandler(async (req, res) => {
 });
 
 const updateClubDetails = asyncHandler(async (req, res) => {
-    // 1. Extract and validate the clubId
     const { clubId } = req.params;
 
     if (!mongoose.isValidObjectId(clubId)) {
         throw new ApiError(400, "Invalid Club ID format");
     }
 
-    // 2. Extract the fields the client wants to update
     const { name, description, contactEmail, isAcceptingMembers } = req.body;
 
-    // Validation: Ensure at least one field is provided to prevent empty database writes
-    if (!name && !description && !contactEmail && isAcceptingMembers === undefined) {
-        throw new ApiError(400, "Please provide at least one field to update");
-    }
-
-    // 3. Fetch the club document to verify ownership
     const club = await Club.findById(clubId);
+    if (!club) throw new ApiError(404, "Club not found");
 
-    if (!club) {
-        throw new ApiError(404, "Club not found");
-    }
-
-    // 4. Authorization (RBAC)
-    // Convert both ObjectIds to strings to ensure strict mathematical equality
     if (club.createdBy.toString() !== req.user._id.toString()) {
         throw new ApiError(403, "Forbidden: Only the club creator can modify these details");
     }
 
-    // 5. Execute the Database Update
-    // The $set operator overwrites only the provided fields, leaving the rest untouched
+    // Handle optional file uploads
+    const logoLocalPath = req.files?.logo?.[0]?.path;
+    const coverLocalPath = req.files?.coverImage?.[0]?.path;
+
+    const updateFields = {};
+    if (name) updateFields.name = name;
+    if (description) updateFields.description = description;
+    if (contactEmail !== undefined) updateFields.contactEmail = contactEmail;
+    if (isAcceptingMembers !== undefined) updateFields.isAcceptingMembers = isAcceptingMembers;
+
+    if (logoLocalPath) {
+        const uploaded = await uploadOnCloudinary(logoLocalPath);
+        if (uploaded?.url) updateFields.logo = uploaded.url;
+    }
+    if (coverLocalPath) {
+        const uploaded = await uploadOnCloudinary(coverLocalPath);
+        if (uploaded?.url) updateFields.coverImage = uploaded.url;
+    }
+
     const updatedClub = await Club.findByIdAndUpdate(
         clubId,
-        {
-            $set: {
-                name,
-                description,
-                contactEmail,
-                isAcceptingMembers
-            }
-        },
-        { new: true, runValidators: true } // Forces Mongoose to run schema validation on the new data
+        { $set: updateFields },
+        { new: true, runValidators: true }
     );
 
-    // 6. Return the updated document
     return res
         .status(200)
         .json(new ApiResponse(200, updatedClub, "Club details updated successfully"));
@@ -397,30 +410,34 @@ const getClubMembers = asyncHandler(async (req, res) => {
         throw new ApiError(404, "Club not found");
     }
 
-    // 3. Authorization (RBAC)
-    // Enforce that only the club LEAD can access the member roster emails and data
-    if (club.createdBy.toString() !== req.user._id.toString()) {
-        throw new ApiError(403, "Forbidden: Only the club LEAD can view the member roster");
+    // 3. Check if requester is a member (all members can see roster, leads see emails too)
+    const isLead = club.createdBy.toString() === req.user._id.toString();
+    const isMember = req.user.joinedClubs.some(
+        (m) => m.club.toString() === clubId
+    );
+    if (!isMember && !isLead) {
+        throw new ApiError(403, "Forbidden: Only club members can view the roster");
     }
 
-    // 4. Execute the Database Read Operation
-    // Query the User collection for anyone who has this clubId in their joinedClubs array.
+    // 4. Fetch members — leads get email, members just get public info
+    const selectFields = isLead
+        ? "fullName username email avatar joinedClubs.$"
+        : "fullName username avatar joinedClubs.$";
+
     const members = await User.find(
         { "joinedClubs.club": clubId }
-    ).select("fullName username email avatar joinedClubs.$"); 
-    // The '$' Positional Operator projects ONLY the specific joinedClubs object that matched our query.
+    ).select(selectFields);
 
-    // 5. Restructure the data for the frontend payload
+    // 5. Restructure for frontend
     const formattedRoster = members.map(member => ({
         _id: member._id,
         fullName: member.fullName,
         username: member.username,
-        email: member.email,
+        ...(isLead && { email: member.email }),
         avatar: member.avatar,
-        role: member.joinedClubs[0].role // Extract the exact role for this specific club
+        role: member.joinedClubs[0].role
     }));
 
-    // 6. Return the secure roster payload
     return res
         .status(200)
         .json(new ApiResponse(200, formattedRoster, "Club roster fetched successfully"));
@@ -428,17 +445,55 @@ const getClubMembers = asyncHandler(async (req, res) => {
 
 
 
-// Update the exports at the bottom of the file:
-export { 
-    createClub, 
-    getAllClubs, 
-    getClubProfile, 
-    joinClub, 
-    leaveClub, 
-    deleteClub, 
+// PATCH /clubs/:clubId/members/:memberId/role  — promote/demote
+const updateMemberRole = asyncHandler(async (req, res) => {
+    const { clubId, memberId } = req.params;
+    const { role } = req.body;
+
+    if (!["MEMBER", "EXECUTIVE"].includes(role))
+        throw new ApiError(400, "Role must be MEMBER or EXECUTIVE");
+
+    const club = await Club.findById(clubId);
+    if (!club) throw new ApiError(404, "Club not found");
+    if (club.createdBy.toString() !== req.user._id.toString())
+        throw new ApiError(403, "Only the club LEAD can change member roles");
+
+    await User.updateOne(
+        { _id: memberId, "joinedClubs.club": clubId },
+        { $set: { "joinedClubs.$.role": role } }
+    );
+    return res.status(200).json(new ApiResponse(200, {}, "Member role updated"));
+});
+
+// DELETE /clubs/:clubId/members/:memberId  — remove from club
+const removeMember = asyncHandler(async (req, res) => {
+    const { clubId, memberId } = req.params;
+
+    const club = await Club.findById(clubId);
+    if (!club) throw new ApiError(404, "Club not found");
+    if (club.createdBy.toString() !== req.user._id.toString())
+        throw new ApiError(403, "Only the club LEAD can remove members");
+    if (memberId === req.user._id.toString())
+        throw new ApiError(400, "You cannot remove yourself");
+
+    await User.findByIdAndUpdate(memberId, {
+        $pull: { joinedClubs: { club: clubId } }
+    });
+    return res.status(200).json(new ApiResponse(200, {}, "Member removed"));
+});
+
+export {
+    createClub,
+    getAllClubs,
+    getClubProfile,
+    joinClub,
+    leaveClub,
+    deleteClub,
     getMyClubs,
     updateClubDetails,
-    getClubMembers
+    getClubMembers,
+    updateMemberRole,
+    removeMember,
 };
 
 

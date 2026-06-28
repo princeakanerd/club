@@ -1,5 +1,7 @@
 import { Event } from "../models/event.models.js";
 import { Club } from "../models/club.models.js";
+import { User } from "../models/user.models.js";
+import { Notification } from "../models/notification.models.js";
 import { ApiError } from "../utils/ApiError.js";
 import { ApiResponse } from "../utils/ApiResponse.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
@@ -32,34 +34,45 @@ const createEvent = asyncHandler(async (req, res) => {
         throw new ApiError(403, "Forbidden: Only the club LEAD can create events for this club");
     }
 
-    // 3. Extract and upload the file
-    // Multer will inject the file into req.files.bannerImage
+    // 3. Extract and upload banner image
     const bannerLocalPath = req.files?.bannerImage?.[0]?.path;
-
-    if (!bannerLocalPath) {
-        throw new ApiError(400, "Event banner image is required");
-    }
+    if (!bannerLocalPath) throw new ApiError(400, "Event banner image is required");
 
     const bannerImage = await uploadOnCloudinary(bannerLocalPath);
+    if (!bannerImage?.url) throw new ApiError(500, "Failed to upload the banner image to cloud storage");
 
-    if (!bannerImage?.url) {
-        throw new ApiError(500, "Failed to upload the banner image to cloud storage");
-    }
+    // Upload past images (last year's photos) — optional, up to 6
+    const pastLocalPaths = (req.files?.pastImages || []).map(f => f.path);
+    const pastUploads = await Promise.all(pastLocalPaths.map(p => uploadOnCloudinary(p)));
+    const pastImages = pastUploads.filter(u => u?.url).map(u => u.url);
 
     // 4. Create the Event Document
-    // We pass the raw eventDate string directly; Mongoose will automatically cast it to a JS Date object
     const event = await Event.create({
         title,
         description,
         eventDate,
         venue,
         bannerImage: bannerImage.url,
+        pastImages,
         isPublished: isPublished === undefined ? true : isPublished,
         hostedBy,
         createdBy: req.user._id
     });
 
-    // 5. Return success response
+    // 5. Notify all club members about the new event
+    const members = await User.find({ "joinedClubs.club": hostedBy });
+
+    const notifications = members.map(member => ({
+        recipient: member._id,
+        message: `New event "${event.title}" has been posted by ${club.name}!`,
+        type: "EVENT_INVITE",
+        relatedEvent: event._id,
+        relatedClub: hostedBy
+    }));
+
+    await Notification.insertMany(notifications);
+
+    // 6. Return success response
     return res
         .status(201)
         .json(new ApiResponse(201, event, "Event successfully created"));
@@ -76,10 +89,10 @@ const getClubEvents = asyncHandler(async (req, res) => {
     // We query the Event collection to find all documents that map to this specific club.
     const events = await Event.find({
         hostedBy: clubId,
-        isPublished: true // Strict filter: Do not return draft events to the public feed
+        isPublished: true
     })
-    .select("-rsvp") // Project out the rsvp array to save bandwidth
-    .sort({ eventDate: 1 }); // Sort by eventDate ascending (1), so the soonest upcoming events appear at the top of the array
+    .populate("rsvp.user", "fullName username avatar")
+    .sort({ eventDate: 1 });
 
     // 3. Return the array of events
     return res
@@ -89,7 +102,7 @@ const getClubEvents = asyncHandler(async (req, res) => {
 const rsvpToEvent = asyncHandler(async (req, res) => {
     // 1. Extract and validate the eventId and status
     const { eventId } = req.params;
-    const { status } = req.body;
+    const { status, reason } = req.body;
 
     if (!mongoose.isValidObjectId(eventId)) {
         throw new ApiError(400, "Invalid Event ID format");
@@ -99,20 +112,16 @@ const rsvpToEvent = asyncHandler(async (req, res) => {
         throw new ApiError(400, "Invalid RSVP status. Must be GOING, NOT_GOING, or MAYBE.");
     }
 
-    // 2. Verify the event actually exists
     const event = await Event.findById(eventId);
+    if (!event) throw new ApiError(404, "Event not found");
 
-    if (!event) {
-        throw new ApiError(404, "Event not found");
-    }
-
-    // 3. Update or Add RSVP
-    const existingRsvpIndex = event.rsvp.findIndex(r => r.user.toString() === req.user._id.toString());
-    
-    if (existingRsvpIndex > -1) {
-        event.rsvp[existingRsvpIndex].status = status;
+    const existingIdx = event.rsvp.findIndex(r => r.user.toString() === req.user._id.toString());
+    if (existingIdx > -1) {
+        event.rsvp[existingIdx].status = status;
+        // Clear reason when switching back to GOING, preserve when NOT_GOING
+        event.rsvp[existingIdx].reason = status === "NOT_GOING" ? (reason || "") : "";
     } else {
-        event.rsvp.push({ user: req.user._id, status });
+        event.rsvp.push({ user: req.user._id, status, reason: status === "NOT_GOING" ? (reason || "") : "" });
     }
 
     await event.save();

@@ -58,6 +58,17 @@ const userSchema = new Schema(
         refreshToken : {
             type : String
         },
+        connections: [
+            {
+                user: { type: Schema.Types.ObjectId, ref: "User" },
+                status: {
+                    type: String,
+                    enum: ["PENDING", "ACCEPTED"],
+                    default: "PENDING",
+                },
+                initiatedBy: { type: Schema.Types.ObjectId, ref: "User" },
+            }
+        ],
         joinedClubs : [
             {
                 club : {

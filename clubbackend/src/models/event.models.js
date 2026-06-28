@@ -40,6 +40,12 @@ const eventSchema = new Schema(
             ref: "User",
             required: true
         },
+        // Photos from previous editions of this event
+        pastImages: [
+            {
+                type: String, // Cloudinary URLs
+            }
+        ],
         // Relational Data: Who is coming? (RSVP Poll)
         rsvp: [
             {
@@ -51,6 +57,11 @@ const eventSchema = new Schema(
                     type: String,
                     enum: ["GOING", "NOT_GOING", "MAYBE"],
                     default: "GOING"
+                },
+                reason: {
+                    type: String,
+                    default: "",
+                    maxLength: 500,
                 }
             }
         ]

@@ -8,7 +8,8 @@ const getUserNotifications = asyncHandler(async (req, res) => {
     const notifications = await Notification.find({ recipient: req.user._id })
         .sort({ createdAt: -1 })
         .populate("relatedEvent", "title eventDate")
-        .populate("relatedClub", "name");
+        .populate("relatedClub", "name")
+        .populate("relatedUser", "fullName username avatar");
 
     return res.status(200).json(new ApiResponse(200, notifications, "Notifications fetched successfully"));
 });
