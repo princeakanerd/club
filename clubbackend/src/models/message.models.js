@@ -25,6 +25,15 @@ const messageSchema = new Schema(
             trim: true,
             maxLength: 2000,
         },
+        // Read receipts (#16). For DMs this is just the recipient once they've
+        // seen it; for club chats it accumulates each member who has read it.
+        readBy: [
+            {
+                user: { type: Schema.Types.ObjectId, ref: "User" },
+                readAt: { type: Date, default: Date.now },
+                _id: false,
+            }
+        ],
     },
     { timestamps: true }
 );

@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import api from "../api/axios";
 import { useAuth } from "../context/AuthContext";
 import Navbar from "../components/Navbar";
+import { uploadImage } from "../utils/uploadImage";
 
 const CATEGORIES = ["TECHNICAL", "CULTURAL", "SPORTS", "LITERARY", "SOCIAL", "OTHER"];
 
@@ -36,19 +37,16 @@ function CreateClubPage() {
         }
         setLoading(true);
         try {
-            const formData = new FormData();
-            formData.append("name", name);
-            formData.append("description", description);
-            formData.append("category", category);
-            if (contactEmail) formData.append("contactEmail", contactEmail);
-            formData.append("logo", logoRef.current.files[0]);
-            if (coverRef.current.files[0]) formData.append("coverImage", coverRef.current.files[0]);
+            const logoUrl = await uploadImage(logoRef.current.files[0], "clubs");
+            const payload = { name, description, category, logoUrl };
+            if (contactEmail) payload.contactEmail = contactEmail;
+            if (coverRef.current.files[0]) payload.coverImageUrl = await uploadImage(coverRef.current.files[0], "covers");
 
-            const res = await api.post("/clubs/create", formData);
+            const res = await api.post("/clubs/create", payload);
             await refreshUser();
             navigate(`/clubs/${res.data.data._id}`);
         } catch (err) {
-            setError(err.response?.data?.message || "Failed to create club.");
+            setError(err.response?.data?.message || err.message || "Failed to create club.");
         } finally {
             setLoading(false);
         }

@@ -39,8 +39,20 @@ const clubSchema = new Schema(
         isAcceptingMembers: {
             type: Boolean,
             default: true // Allows club leads to pause new registrations
+        },
+        // When true, joining creates a pending request a LEAD must approve
+        // instead of adding the member instantly.
+        requiresApproval: {
+            type: Boolean,
+            default: false
+        },
+        // Denormalized member count, kept in sync via $inc on join/leave/remove
+        // so list queries don't need a per-club $lookup to count members.
+        memberCount: {
+            type: Number,
+            default: 0
         }
-    }, 
+    },
     {
         timestamps: true // Automatically adds createdAt and updatedAt fields
     }

@@ -2,16 +2,23 @@ import { Notification } from "../models/notification.models.js";
 import { ApiError } from "../utils/ApiError.js";
 import { ApiResponse } from "../utils/ApiResponse.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
+import { parsePageQuery, buildPage } from "../utils/pagination.js";
 
 const getUserNotifications = asyncHandler(async (req, res) => {
-    // Fetch notifications for the logged-in user, sorted by newest first
-    const notifications = await Notification.find({ recipient: req.user._id })
-        .sort({ createdAt: -1 })
+    // Newest-first, cursor-paginated (?limit&cursor). Backward compatible:
+    // callers that pass nothing get the most recent page in `data` as before.
+    const { limit, cursorFilter } = parsePageQuery(req, { defaultLimit: 20 });
+
+    const docs = await Notification.find({ recipient: req.user._id, ...cursorFilter })
+        .sort({ _id: -1 })
+        .limit(limit + 1)
         .populate("relatedEvent", "title eventDate")
         .populate("relatedClub", "name")
         .populate("relatedUser", "fullName username avatar");
 
-    return res.status(200).json(new ApiResponse(200, notifications, "Notifications fetched successfully"));
+    const { items, meta } = buildPage(docs, limit);
+
+    return res.status(200).json(new ApiResponse(200, items, "Notifications fetched successfully", meta));
 });
 
 const markAsRead = asyncHandler(async (req, res) => {

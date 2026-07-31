@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import api from "../api/axios";
 import { useAuth } from "../context/AuthContext";
 import Navbar from "../components/Navbar";
+import { uploadImage } from "../utils/uploadImage";
 
 function ProfilePage() {
     const { user, refreshUser, logout } = useAuth();
@@ -75,15 +76,14 @@ function ProfilePage() {
         const file = e.target.files[0];
         if (!file) return;
         setAvatarName(file.name);
-        const fd = new FormData();
-        fd.append("avatar", file);
         setSaving(true);
         try {
-            await api.patch("/users/avatar", fd);
+            const avatarUrl = await uploadImage(file, "avatars");
+            await api.patch("/users/avatar", { avatarUrl });
             await refreshUser();
             flash("ok", "Avatar updated.");
         } catch (err) {
-            flash("err", err.response?.data?.message || "Failed to update avatar.");
+            flash("err", err.response?.data?.message || err.message || "Failed to update avatar.");
         } finally {
             setSaving(false);
             setAvatarName("");

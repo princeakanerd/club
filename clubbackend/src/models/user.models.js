@@ -1,6 +1,7 @@
 import mongoose, {Schema} from "mongoose";
 import bcrypt from "bcrypt"
 import jwt from "jsonwebtoken"
+import crypto from "crypto"
 
 const userSchema = new Schema(
     {
@@ -86,11 +87,39 @@ const userSchema = new Schema(
                 }
             }
         ],
+        // Email verification: we store only a HASH of the token, never the raw
+        // token, so a DB leak can't be used to verify/hijack accounts.
+        isEmailVerified : {
+            type : Boolean,
+            default : false,
+        },
+        emailVerificationToken : {
+            type : String,
+            select : false,
+        },
+        emailVerificationExpiry : {
+            type : Date,
+            select : false,
+        },
+        // Password reset: same hashed-token pattern, short-lived.
+        passwordResetToken : {
+            type : String,
+            select : false,
+        },
+        passwordResetExpiry : {
+            type : Date,
+            select : false,
+        },
 
     }, {
         timestamps : true
     }
 )
+
+// Hot path: every club member-count, roster lookup, and "is this user a
+// member?" check queries by joinedClubs.club. Without this it's a full
+// collection scan — the single most impactful index in the app.
+userSchema.index({ "joinedClubs.club": 1 });
 
 userSchema.pre("save", async function(){
     // console.log("1. Pre-save hook started"); // Debug Log
@@ -132,5 +161,27 @@ userSchema.methods.generateRefreshToken = function() {
         expiresIn:process.env.REFRESH_TOKEN_EXPIRY
     })
 }
+
+/* Generate a one-time token for email verification / password reset.
+   Returns the RAW token (goes in the emailed link); stores only its SHA-256
+   HASH plus an expiry on the document. Caller must save the document.
+   `kind` is "emailVerification" or "passwordReset". */
+userSchema.methods.generateOneTimeToken = function(kind, ttlMinutes = 30) {
+    const rawToken = crypto.randomBytes(32).toString("hex");
+    const hashed = crypto.createHash("sha256").update(rawToken).digest("hex");
+    const expiry = Date.now() + ttlMinutes * 60 * 1000;
+
+    if (kind === "emailVerification") {
+        this.emailVerificationToken = hashed;
+        this.emailVerificationExpiry = expiry;
+    } else if (kind === "passwordReset") {
+        this.passwordResetToken = hashed;
+        this.passwordResetExpiry = expiry;
+    } else {
+        throw new Error(`Unknown one-time token kind: ${kind}`);
+    }
+
+    return rawToken;
+};
 
 export const User = mongoose.model("User", userSchema) ;

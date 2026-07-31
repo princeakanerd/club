@@ -60,6 +60,13 @@ html {
   scroll-behavior: smooth;
 }
 
+/* Lenis smooth scroll */
+html.lenis, html.lenis body { height: auto; }
+.lenis.lenis-smooth { scroll-behavior: auto !important; }
+.lenis.lenis-smooth [data-lenis-prevent] { overscroll-behavior: contain; }
+.lenis.lenis-stopped { overflow: hidden; }
+.lenis.lenis-smooth iframe { pointer-events: none; }
+
 body {
   margin: 0;
   background: var(--forest-deep);
@@ -580,6 +587,112 @@ button {
   clip-path: polygon(0 0, 0 0, 0 100%, 0% 100%);
 }
 .gsap-mask { overflow: hidden; }
+
+/* ============================================================
+   PINNED HORIZONTAL CATEGORY SCROLL
+   ============================================================ */
+.cs-section {
+  position: relative;
+  z-index: 2;
+  overflow: hidden;
+  isolation: isolate;
+  background: linear-gradient(180deg, var(--forest-deep), #120608);
+}
+/* The track is what gets pinned (position: fixed) — it needs its own opaque
+   fill so the neighbouring section can't show through at the pin seam. */
+.cs-track { background: linear-gradient(180deg, var(--forest-deep), #120608); }
+.cs-track {
+  display: flex;
+  height: 100vh;
+  width: max-content;
+  will-change: transform;
+}
+.cs-panel {
+  flex: 0 0 min(78vw, 760px);
+  height: 100vh;
+  display: flex;
+  align-items: center;
+  padding: 0 clamp(28px, 6vw, 96px);
+  border-right: 1px solid var(--line);
+  cursor: pointer;
+}
+.cs-panel:not(.cs-intro):hover .cs-title { color: var(--rust); }
+.cs-intro { cursor: default; }
+.cs-inner { max-width: 520px; }
+.cs-kicker, .cs-index {
+  font-size: 12px; letter-spacing: 0.24em; color: var(--rust);
+  font-weight: 700; text-transform: uppercase; display: block; margin-bottom: 16px;
+}
+.cs-headline { font-size: clamp(44px, 6vw, 90px); line-height: 0.98; margin: 0; }
+.cs-headline em { font-style: italic; color: var(--rust); }
+.cs-lead { font-size: 17px; color: var(--ink-soft); line-height: 1.7; margin-top: 22px; max-width: 380px; }
+.cs-title { font-size: clamp(40px, 5vw, 76px); margin: 0 0 18px; transition: color 0.3s var(--ease); }
+.cs-blurb { font-size: 17px; color: var(--ink-soft); line-height: 1.7; max-width: 400px; margin: 0 0 24px; }
+.cs-go { font-size: 14px; font-weight: 600; color: var(--rust); }
+
+/* ============================================================
+   PINNED "HOW IT WORKS" SCRUB
+   ============================================================ */
+.hiw-section {
+  position: relative;
+  z-index: 3;
+  isolation: isolate;
+  background: linear-gradient(180deg, #120608, var(--forest-deep));
+}
+.hiw-stage {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 0 clamp(24px, 6vw, 90px);
+  position: relative;
+  /* The stage is what gets pinned (position: fixed) — opaque fill so the
+     CategoryScroll panels can't bleed through when scrolling across the seam. */
+  background: linear-gradient(180deg, #120608, var(--forest-deep));
+}
+.hiw-kicker {
+  position: absolute;
+  top: clamp(40px, 10vh, 90px);
+  font-size: 12px; letter-spacing: 0.24em; color: var(--rust); font-weight: 700;
+}
+.hiw-steps { position: relative; width: 100%; max-width: 760px; height: 320px; }
+.hiw-step {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+}
+.hiw-num {
+  font-family: var(--serif);
+  font-size: clamp(56px, 9vw, 130px);
+  color: var(--rust);
+  line-height: 0.9;
+  opacity: 0.9;
+}
+.hiw-title { font-size: clamp(32px, 4.5vw, 64px); margin: 0; }
+.hiw-body { font-size: clamp(15px, 1.5vw, 19px); color: var(--ink-soft); line-height: 1.7; max-width: 460px; margin: 0; }
+.hiw-progress {
+  position: absolute;
+  bottom: clamp(40px, 9vh, 80px);
+  width: min(280px, 60vw);
+  height: 3px;
+  border-radius: 999px;
+  background: var(--line);
+  overflow: hidden;
+}
+.hiw-progress > span {
+  display: block; height: 100%; width: 100%;
+  background: var(--rust); transform: scaleX(0); transform-origin: left;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cs-track { transform: none !important; }
+}
 
 /* Editorial page header */
 .page-head {

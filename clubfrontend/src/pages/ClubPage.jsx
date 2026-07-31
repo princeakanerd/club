@@ -6,6 +6,7 @@ import Navbar from "../components/Navbar";
 import Modal from "../components/Modal";
 import Icon from "../components/Icon";
 import { getCoverImage, getLogoImage } from "../utils/clubImages";
+import { uploadImage } from "../utils/uploadImage";
 
 function ClubPage() {
     const { clubId } = useParams();
@@ -954,17 +955,21 @@ function CreateEventModal({ clubId, onClose, onSuccess }) {
         setError("");
         setLoading(true);
         try {
-            const fd = new FormData();
-            fd.append("hostedBy", clubId);
-            Object.entries(form).forEach(([k, v]) => fd.append(k, v));
-            if (bannerRef.current?.files[0]) fd.append("bannerImage", bannerRef.current.files[0]);
-            if (pastRef.current?.files) {
-                Array.from(pastRef.current.files).forEach(f => fd.append("pastImages", f));
+            // Upload images straight to Cloudinary, then send only URLs (JSON).
+            const bannerFile = bannerRef.current?.files[0];
+            if (!bannerFile) { setError("Banner image is required."); setLoading(false); return; }
+            const bannerImageUrl = await uploadImage(bannerFile, "events");
+
+            let pastImageUrls = [];
+            if (pastRef.current?.files?.length) {
+                pastImageUrls = await Promise.all(
+                    Array.from(pastRef.current.files).map(f => uploadImage(f, "events"))
+                );
             }
-            await api.post("/events/create", fd);
+            await api.post("/events/create", { hostedBy: clubId, ...form, bannerImageUrl, pastImageUrls });
             onSuccess();
         } catch (err) {
-            setError(err.response?.data?.message || "Failed to create event.");
+            setError(err.response?.data?.message || err.message || "Failed to create event.");
         } finally {
             setLoading(false);
         }
@@ -1031,14 +1036,12 @@ function CreatePostModal({ clubId, onClose, onSuccess }) {
         setError("");
         setLoading(true);
         try {
-            const fd = new FormData();
-            fd.append("clubId", clubId);
-            fd.append("caption", caption);
-            fd.append("image", imageRef.current.files[0]);
-            await api.post("/posts", fd);
+            // Upload the image straight to Cloudinary, then send only the URL.
+            const imageUrl = await uploadImage(imageRef.current.files[0], "posts");
+            await api.post("/posts", { clubId, caption, imageUrl });
             onSuccess();
         } catch (err) {
-            setError(err.response?.data?.message || "Failed to create post.");
+            setError(err.response?.data?.message || err.message || "Failed to create post.");
         } finally {
             setLoading(false);
         }
@@ -1303,17 +1306,18 @@ function EditClubModal({ club, onClose, onSuccess }) {
         setError("");
         setLoading(true);
         try {
-            const fd = new FormData();
-            fd.append("name", form.name);
-            fd.append("description", form.description);
-            fd.append("contactEmail", form.contactEmail);
-            fd.append("isAcceptingMembers", form.isAcceptingMembers);
-            if (logoRef.current?.files[0]) fd.append("logo", logoRef.current.files[0]);
-            if (coverRef.current?.files[0]) fd.append("coverImage", coverRef.current.files[0]);
-            const res = await api.patch(`/clubs/${club._id}`, fd);
+            const payload = {
+                name: form.name,
+                description: form.description,
+                contactEmail: form.contactEmail,
+                isAcceptingMembers: form.isAcceptingMembers,
+            };
+            if (logoRef.current?.files[0]) payload.logoUrl = await uploadImage(logoRef.current.files[0], "clubs");
+            if (coverRef.current?.files[0]) payload.coverImageUrl = await uploadImage(coverRef.current.files[0], "covers");
+            const res = await api.patch(`/clubs/${club._id}`, payload);
             onSuccess(res.data.data);
         } catch (err) {
-            setError(err.response?.data?.message || "Failed to update club.");
+            setError(err.response?.data?.message || err.message || "Failed to update club.");
         } finally {
             setLoading(false);
         }

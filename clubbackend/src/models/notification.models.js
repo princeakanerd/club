@@ -14,7 +14,12 @@ const notificationSchema = new Schema(
         },
         type: {
             type: String,
-            enum: ["EVENT_INVITE", "REMINDER", "ANNOUNCEMENT", "CLUB_UPDATE", "CONNECTION_REQUEST", "CONNECTION_ACCEPTED"],
+            enum: [
+                "EVENT_INVITE", "REMINDER", "ANNOUNCEMENT", "CLUB_UPDATE",
+                "CONNECTION_REQUEST", "CONNECTION_ACCEPTED",
+                "JOIN_REQUEST", "JOIN_APPROVED", "JOIN_REJECTED", "CLUB_INVITE",
+                "POST_LIKE", "POST_COMMENT"
+            ],
             required: true
         },
         // Optional link to the event this notification is about
@@ -32,6 +37,11 @@ const notificationSchema = new Schema(
             type: Schema.Types.ObjectId,
             ref: "User"
         },
+        // Optional link to a post (for likes/comments)
+        relatedPost: {
+            type: Schema.Types.ObjectId,
+            ref: "Post"
+        },
         isRead: {
             type: Boolean,
             default: false
@@ -41,5 +51,10 @@ const notificationSchema = new Schema(
         timestamps: true
     }
 );
+
+// Inbox: list a user's notifications newest-first, and the unread-count /
+// mark-all-read paths filter by recipient + isRead. This compound index
+// covers both (and supersedes the single-field recipient index).
+notificationSchema.index({ recipient: 1, isRead: 1, createdAt: -1 });
 
 export const Notification = mongoose.model("Notification", notificationSchema);

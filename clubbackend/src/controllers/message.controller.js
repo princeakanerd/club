@@ -5,7 +5,8 @@ import { ApiError } from "../utils/ApiError.js";
 import { ApiResponse } from "../utils/ApiResponse.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import mongoose from "mongoose";
-import { io, onlineUsers } from "../index.js";
+import { io, emitToUser } from "../index.js";
+import { parsePageQuery, buildPage } from "../utils/pagination.js";
 
 // POST /messages/dm/:receiverId
 const sendDM = asyncHandler(async (req, res) => {
@@ -28,9 +29,8 @@ const sendDM = asyncHandler(async (req, res) => {
     });
     await msg.populate("sender", "fullName username avatar");
 
-    // Emit to receiver if online
-    const receiverSocket = onlineUsers.get(receiverId);
-    if (receiverSocket) io.to(receiverSocket).emit("new_dm", msg);
+    // Live-deliver to every socket the receiver has open
+    emitToUser(receiverId, "new_dm", msg);
 
     return res.status(201).json(new ApiResponse(201, msg, "Message sent"));
 });
@@ -40,18 +40,55 @@ const getDMThread = asyncHandler(async (req, res) => {
     const { otherUserId } = req.params;
     const myId = req.user._id;
 
-    const messages = await Message.find({
+    // Chat pages "backwards": fetch the newest `limit` (older than ?cursor if
+    // loading history), then reverse to ascending so the frontend still renders
+    // oldest→newest as before. nextCursor points at older messages.
+    const { limit, cursorFilter } = parsePageQuery(req, { defaultLimit: 40 });
+    const docs = await Message.find({
         receiverId: { $ne: null },
+        ...cursorFilter,
         $or: [
             { sender: myId, receiverId: otherUserId },
             { sender: otherUserId, receiverId: myId },
         ],
     })
         .populate("sender", "fullName username avatar")
-        .sort({ createdAt: 1 })
-        .limit(200);
+        .sort({ _id: -1 })
+        .limit(limit + 1);
 
-    return res.status(200).json(new ApiResponse(200, messages, "DM thread fetched"));
+    const { items, meta } = buildPage(docs, limit);
+    const messages = items.reverse(); // ascending for display
+
+    // Mark everything the partner sent me as read (#16), then tell them live.
+    const unreadFromPartner = await Message.updateMany(
+        {
+            sender: otherUserId,
+            receiverId: myId,
+            "readBy.user": { $ne: myId },
+        },
+        { $push: { readBy: { user: myId } } }
+    );
+    if (unreadFromPartner.modifiedCount > 0) {
+        emitToUser(otherUserId, "dm_read", { by: myId.toString() });
+    }
+
+    return res.status(200).json(new ApiResponse(200, messages, "DM thread fetched", meta));
+});
+
+// PATCH /messages/dm/:otherUserId/read — explicitly mark a DM thread read (#16)
+const markDMRead = asyncHandler(async (req, res) => {
+    const { otherUserId } = req.params;
+    const myId = req.user._id;
+
+    const result = await Message.updateMany(
+        { sender: otherUserId, receiverId: myId, "readBy.user": { $ne: myId } },
+        { $push: { readBy: { user: myId } } }
+    );
+    if (result.modifiedCount > 0) {
+        emitToUser(otherUserId, "dm_read", { by: myId.toString() });
+    }
+
+    return res.status(200).json(new ApiResponse(200, { marked: result.modifiedCount }, "Marked as read"));
 });
 
 // POST /messages/club/:clubId
@@ -89,12 +126,21 @@ const getClubMessages = asyncHandler(async (req, res) => {
     if (!isMember)
         throw new ApiError(403, "You must be a club member to view this chat");
 
-    const messages = await Message.find({ clubId })
+    const { limit, cursorFilter } = parsePageQuery(req, { defaultLimit: 40 });
+    const docs = await Message.find({ clubId, ...cursorFilter })
         .populate("sender", "fullName username avatar")
-        .sort({ createdAt: 1 })
-        .limit(200);
+        .sort({ _id: -1 })
+        .limit(limit + 1);
+    const { items, meta } = buildPage(docs, limit);
+    const messages = items.reverse(); // ascending for display
 
-    return res.status(200).json(new ApiResponse(200, messages, "Club chat fetched"));
+    // Mark club messages (not sent by me) as read by me (#16)
+    await Message.updateMany(
+        { clubId, sender: { $ne: req.user._id }, "readBy.user": { $ne: req.user._id } },
+        { $push: { readBy: { user: req.user._id } } }
+    );
+
+    return res.status(200).json(new ApiResponse(200, messages, "Club chat fetched", meta));
 });
 
 // GET /messages/inbox — all conversations (DM partners + clubs)
@@ -122,6 +168,21 @@ const getInbox = asyncHandler(async (req, res) => {
                 _id: "$partnerId",
                 lastMessage: { $first: "$content" },
                 lastAt: { $first: "$createdAt" },
+                // Unread = messages the partner sent me that I haven't read (#16)
+                unread: {
+                    $sum: {
+                        $cond: [
+                            {
+                                $and: [
+                                    { $eq: ["$receiverId", myId] },
+                                    { $not: [{ $in: [myId, "$readBy.user"] }] },
+                                ],
+                            },
+                            1,
+                            0,
+                        ],
+                    },
+                },
             },
         },
     ]);
@@ -138,6 +199,7 @@ const getInbox = asyncHandler(async (req, res) => {
         partner: partnerMap[d._id.toString()],
         lastMessage: d.lastMessage,
         lastAt: d.lastAt,
+        unread: d.unread,
     }));
 
     // Club group chats the user is a member of
@@ -150,6 +212,21 @@ const getInbox = asyncHandler(async (req, res) => {
                 _id: "$clubId",
                 lastMessage: { $first: "$content" },
                 lastAt: { $first: "$createdAt" },
+                // Unread club messages = not sent by me and not yet read by me
+                unread: {
+                    $sum: {
+                        $cond: [
+                            {
+                                $and: [
+                                    { $ne: ["$sender", myId] },
+                                    { $not: [{ $in: [myId, "$readBy.user"] }] },
+                                ],
+                            },
+                            1,
+                            0,
+                        ],
+                    },
+                },
             },
         },
     ]);
@@ -163,6 +240,7 @@ const getInbox = asyncHandler(async (req, res) => {
         club: clubMap[c._id.toString()],
         lastMessage: c.lastMessage,
         lastAt: c.lastAt,
+        unread: c.unread,
     }));
 
     // Also include clubs with no messages yet
@@ -184,4 +262,4 @@ const getInbox = asyncHandler(async (req, res) => {
     return res.status(200).json(new ApiResponse(200, all, "Inbox fetched"));
 });
 
-export { sendDM, getDMThread, sendClubMessage, getClubMessages, getInbox };
+export { sendDM, getDMThread, markDMRead, sendClubMessage, getClubMessages, getInbox };

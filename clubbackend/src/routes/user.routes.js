@@ -1,7 +1,10 @@
 import { Router } from "express";
 import { upload } from "../middlewares/multer.middleware.js"
-import { loginUser, registerUser, logoutUser, changeCurrentPassword, getCurrentUser, updateAccountDetails, updateUserAvatar, updateUserCoverImage, updateUserProfile } from "../controllers/user.controller.js";
+import { loginUser, registerUser, logoutUser, changeCurrentPassword, getCurrentUser, updateAccountDetails, updateUserAvatar, updateUserCoverImage, updateUserProfile, refreshAccessToken, verifyEmail, resendVerificationEmail, forgotPassword, resetPassword } from "../controllers/user.controller.js";
 import { verifyJWT } from "../middlewares/auth.middleware.js";
+import { validate } from "../middlewares/validate.middleware.js";
+import { authLimiter } from "../middlewares/rateLimit.middleware.js";
+import { registerSchema, loginSchema, changePasswordSchema, forgotPasswordSchema, resetPasswordSchema } from "../validators/user.validators.js";
 
 const router = Router();
 
@@ -19,13 +22,25 @@ router.route("/register").post(
             maxCount: 1
         }
     ]),
+    // multer populates req.body from the multipart form before we validate it
+    validate(registerSchema),
     registerUser
 )
 
-router.route("/login").post(loginUser);
+router.route("/login").post(authLimiter, validate(loginSchema), loginUser);
+// Re-issue an access token from a valid refresh token (rotates the refresh token)
+router.route("/refresh-token").post(refreshAccessToken);
+
+// ── Email verification & password reset ──
+// Verify supports GET (clicking the email link) and POST (frontend posting the token)
+router.route("/verify-email").get(verifyEmail).post(verifyEmail);
+router.route("/resend-verification").post(verifyJWT, authLimiter, resendVerificationEmail);
+router.route("/forgot-password").post(authLimiter, validate(forgotPasswordSchema), forgotPassword);
+router.route("/reset-password").post(authLimiter, validate(resetPasswordSchema), resetPassword);
+
 //Protected Routes
 router.route("/logout").post(verifyJWT, logoutUser);
-router.route("/change-password").post(verifyJWT, changeCurrentPassword);
+router.route("/change-password").post(verifyJWT, validate(changePasswordSchema), changeCurrentPassword);
 router.route("/current-user").get(verifyJWT, getCurrentUser);
 router.route("/update-account").patch(verifyJWT, updateAccountDetails);
 router.route("/avatar").patch(

@@ -34,7 +34,13 @@ function RegisterPage() {
             await api.post("/users/register", formData);
             navigate("/login");
         } catch (err) {
-            setError(err.response?.data?.message || "Registration failed. Try again.");
+            // Prefer the specific per-field validation messages so the user
+            // knows what to fix, not just a generic "Validation failed".
+            const data = err.response?.data;
+            const detail = Array.isArray(data?.errors) && data.errors.length
+                ? data.errors.join(" • ")
+                : data?.message;
+            setError(detail || "Registration failed. Try again.");
         } finally {
             setLoading(false);
         }
@@ -80,7 +86,7 @@ function RegisterPage() {
                     </div>
                     <div>
                         <label style={labelStyle}>Batch Year</label>
-                        <input type="number" value={batchYear} onChange={(e) => setBatchYear(e.target.value)} required className="field" />
+                        <input type="number" min="1990" max={new Date().getFullYear() + 6} step="1" value={batchYear} onChange={(e) => setBatchYear(e.target.value)} required className="field" placeholder="e.g. 2025" />
                     </div>
                 </div>
                 <div>

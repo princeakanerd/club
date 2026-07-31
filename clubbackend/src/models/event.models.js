@@ -62,13 +62,39 @@ const eventSchema = new Schema(
                     type: String,
                     default: "",
                     maxLength: 500,
+                },
+                // Attendance: flipped true on check-in (QR self-scan or manual)
+                attended: {
+                    type: Boolean,
+                    default: false
+                },
+                checkedInAt: {
+                    type: Date
                 }
             }
-        ]
+        ],
+        // Secret token encoded in the event's check-in QR. Regeneratable by
+        // the LEAD so a leaked code can be rotated. Never returned in public
+        // event listings (only via the lead-only checkin-code endpoint).
+        checkInCode: {
+            type: String,
+            select: false
+        },
+        // Which reminders have already gone out, so the hourly cron never
+        // double-sends. e.g. ["24h", "1h"].
+        remindersSent: {
+            type: [String],
+            default: []
+        }
     },
     {
         timestamps: true // Automatically adds createdAt and updatedAt
     }
 );
+
+// Club event lists query by host + published, sorted by date.
+eventSchema.index({ hostedBy: 1, isPublished: 1, eventDate: 1 });
+// The reminder cron scans a date window; index eventDate for that range query.
+eventSchema.index({ eventDate: 1 });
 
 export const Event = mongoose.model("Event", eventSchema);

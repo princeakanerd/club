@@ -1,5 +1,13 @@
 import { Router } from "express";
 import { createClub, deleteClub, getAllClubs, getClubMembers, getClubProfile, getMyClubs, joinClub, leaveClub, updateClubDetails, updateMemberRole, removeMember } from "../controllers/club.controller.js";
+import {
+    requestToJoin,
+    getClubJoinRequests,
+    resolveJoinRequest,
+    inviteToClub,
+    getMyInvites,
+    respondToInvite,
+} from "../controllers/joinRequest.controller.js";
 import { verifyJWT } from "../middlewares/auth.middleware.js";
 import { upload } from "../middlewares/multer.middleware.js";
 
@@ -12,6 +20,10 @@ router.route("/").get(getAllClubs);
 router.use(verifyJWT);
 
 router.route("/my-clubs").get(getMyClubs);
+
+// ── Invites the current user has received (static paths BEFORE /:clubId) ──
+router.route("/invites/mine").get(getMyInvites);
+router.route("/invites/:requestId").patch(respondToInvite);
 
 // /:clubId must come after named routes to avoid swallowing them
 router.route("/:clubId").get(getClubProfile);
@@ -34,5 +46,14 @@ router.route("/:clubId/leave").post(leaveClub);
 router.route("/:clubId/members").get(getClubMembers);
 router.route("/:clubId/members/:memberId/role").patch(updateMemberRole);
 router.route("/:clubId/members/:memberId").delete(removeMember);
+
+// ── Join requests (#6) ──
+// User asks to join (instant join if the club doesn't require approval)
+router.route("/:clubId/requests").post(requestToJoin).get(getClubJoinRequests);
+// LEAD approves/rejects a pending request
+router.route("/:clubId/requests/:requestId").patch(resolveJoinRequest);
+
+// ── Invites (#7): LEAD invites a user to the club ──
+router.route("/:clubId/invites").post(inviteToClub);
 
 export default router;

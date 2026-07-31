@@ -3,11 +3,20 @@ import { ApiError } from "../utils/ApiError.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { ApiResponse } from "../utils/ApiResponse.js";
 import jwt from "jsonwebtoken";
+import crypto from "crypto";
 import {
   deleteFromCloudinary,
   uploadOnCloudinary,
 } from "../utils/cloudinary.js";
 import { upload } from "../middlewares/multer.middleware.js";
+import {
+  sendVerificationEmail,
+  sendPasswordResetEmail,
+} from "../utils/email.js";
+
+/* Hash a raw token the same way the model does, so we can look up the stored
+   hash without ever persisting the raw token. */
+const hashToken = (raw) => crypto.createHash("sha256").update(raw).digest("hex");
 
 const registerUser = asyncHandler(async (req, res) => {
   // 1. Extract required text fields from the incoming request body
@@ -58,17 +67,104 @@ const registerUser = asyncHandler(async (req, res) => {
       // bio, interests, and joinedClubs are optional, so we leave them out for now
   });
 
-  // 7. Retrieve the created user from the database and remove sensitive fields before sending the response
+  // 7. Issue an email-verification token and send the verification email.
+  // We don't block registration on email delivery failing.
+  const rawToken = user.generateOneTimeToken("emailVerification", 30);
+  await user.save({ validateBeforeSave: false });
+  try {
+      await sendVerificationEmail(user, rawToken);
+  } catch (err) {
+      console.error("Failed to send verification email:", err?.message);
+  }
+
+  // 8. Retrieve the created user from the database and remove sensitive fields before sending the response
   const createdUser = await User.findById(user._id).select("-password -refreshToken");
 
   if (!createdUser) {
       throw new ApiError(500, "Something went wrong while registering the user in the database");
   }
 
-  // 8. Send the final success response to the client
+  // 9. Send the final success response to the client
   return res.status(201).json(
-      new ApiResponse(201, createdUser, "User registered successfully")
+      new ApiResponse(201, createdUser, "User registered. Please check your email to verify your account.")
   );
+});
+
+/* GET/POST verify-email?token=...  — confirm an email address. */
+const verifyEmail = asyncHandler(async (req, res) => {
+  const token = req.body?.token || req.query?.token;
+  if (!token) throw new ApiError(400, "Verification token is required");
+
+  const user = await User.findOne({
+    emailVerificationToken: hashToken(token),
+    emailVerificationExpiry: { $gt: Date.now() },
+  });
+
+  if (!user) throw new ApiError(400, "Verification link is invalid or has expired");
+
+  user.isEmailVerified = true;
+  user.emailVerificationToken = undefined;
+  user.emailVerificationExpiry = undefined;
+  await user.save({ validateBeforeSave: false });
+
+  return res.status(200).json(new ApiResponse(200, {}, "Email verified successfully"));
+});
+
+/* POST resend-verification — re-issue a verification email for the logged-in
+   user (verifyJWT runs first, so req.user is set). */
+const resendVerificationEmail = asyncHandler(async (req, res) => {
+  const user = await User.findById(req.user._id);
+  if (!user) throw new ApiError(404, "User not found");
+  if (user.isEmailVerified) throw new ApiError(400, "Email is already verified");
+
+  const rawToken = user.generateOneTimeToken("emailVerification", 30);
+  await user.save({ validateBeforeSave: false });
+  await sendVerificationEmail(user, rawToken);
+
+  return res.status(200).json(new ApiResponse(200, {}, "Verification email sent"));
+});
+
+/* POST forgot-password { email } — always responds 200 so we don't reveal
+   which emails are registered. Only sends a reset email if the user exists. */
+const forgotPassword = asyncHandler(async (req, res) => {
+  const { email } = req.body;
+
+  const user = await User.findOne({ email });
+  if (user) {
+    const rawToken = user.generateOneTimeToken("passwordReset", 30);
+    await user.save({ validateBeforeSave: false });
+    try {
+      await sendPasswordResetEmail(user, rawToken);
+    } catch (err) {
+      console.error("Failed to send reset email:", err?.message);
+    }
+  }
+
+  return res
+    .status(200)
+    .json(new ApiResponse(200, {}, "If an account exists for that email, a reset link has been sent"));
+});
+
+/* POST reset-password { token, newPassword } — consume the reset token and
+   set a new password. Also clears any active refresh token so existing
+   sessions are forced to re-login. */
+const resetPassword = asyncHandler(async (req, res) => {
+  const { token, newPassword } = req.body;
+
+  const user = await User.findOne({
+    passwordResetToken: hashToken(token),
+    passwordResetExpiry: { $gt: Date.now() },
+  });
+
+  if (!user) throw new ApiError(400, "Reset link is invalid or has expired");
+
+  user.password = newPassword; // pre-save hook hashes it
+  user.passwordResetToken = undefined;
+  user.passwordResetExpiry = undefined;
+  user.refreshToken = undefined; // invalidate existing sessions
+  await user.save();
+
+  return res.status(200).json(new ApiResponse(200, {}, "Password reset successfully. Please log in."));
 });
 
 const loginUser = asyncHandler(async (req, res, next) => {
@@ -174,7 +270,7 @@ const refreshAccessToken = asyncHandler(async (req, res) => {
   //Incase the accessToken expires we generate a new one using the refreshToken in the db
 
   const incomingRefreshToken =
-    req.cookies.refreshToken || req.body.refreshToken;
+    req.cookies?.refreshToken || req.body?.refreshToken;
 
   if (!incomingRefreshToken) {
     throw new ApiError(401, "Unauthorised request");
@@ -292,19 +388,20 @@ const updateAccountDetails = asyncHandler(async (req, res) => {
 });
 
 const updateUserAvatar = asyncHandler(async (req, res) => {
-  // 1. Extract file path
+  // 1. Resolve the new avatar URL — direct-upload URL preferred, else file.
+  const directUrl = typeof req.body.avatarUrl === "string" ? req.body.avatarUrl.trim() : "";
   const avatarLocalPath = req.file?.path;
-  console.log(avatarLocalPath);
-  
-  if (!avatarLocalPath) {
+
+  if (!directUrl && !avatarLocalPath) {
       throw new ApiError(400, "Avatar file is missing");
   }
 
-  // 2. Upload to Cloudinary
-  const avatar = await uploadOnCloudinary(avatarLocalPath);
-  
-  if (!avatar.url) {
-      throw new ApiError(400, "Error while uploading on cloudinary");
+  // 2. Get the URL (upload only if a raw file was sent)
+  let newAvatarUrl = directUrl;
+  if (!newAvatarUrl) {
+      const avatar = await uploadOnCloudinary(avatarLocalPath);
+      if (!avatar?.url) throw new ApiError(400, "Error while uploading on cloudinary");
+      newAvatarUrl = avatar.url;
   }
 
   // 3. Retrieve old avatar url directly from the injected req.user object
@@ -315,7 +412,7 @@ const updateUserAvatar = asyncHandler(async (req, res) => {
       req.user._id,
       {
           $set: {
-              avatar: avatar.url,
+              avatar: newAvatarUrl,
           },
       },
       { new: true }
@@ -331,19 +428,21 @@ const updateUserAvatar = asyncHandler(async (req, res) => {
 });
 
 const updateUserCoverImage = asyncHandler(async (req, res) => {
-  // 1. Extract the local file path (populated by Multer)
+  // 1. Resolve the new cover URL — direct-upload URL preferred, else file.
+  const directUrl = typeof req.body.coverImageUrl === "string" ? req.body.coverImageUrl.trim() : "";
   const coverImageLocalPath = req.file?.path;
 
-  if (!coverImageLocalPath) {
+  if (!directUrl && !coverImageLocalPath) {
       throw new ApiError(400, "Cover image file is missing");
   }
 
-  // 2. Upload the new file to Cloudinary
-  const coverImage = await uploadOnCloudinary(coverImageLocalPath);
-
-  if (!coverImage.url) {
-      throw new ApiError(400, "Error while uploading cover image to Cloudinary");
+  let newCoverUrl = directUrl;
+  if (!newCoverUrl) {
+      const coverImage = await uploadOnCloudinary(coverImageLocalPath);
+      if (!coverImage?.url) throw new ApiError(400, "Error while uploading cover image to Cloudinary");
+      newCoverUrl = coverImage.url;
   }
+  const coverImage = { url: newCoverUrl };
 
   // 3. Retrieve the old cover image URL directly from the injected req.user object
   const oldCoverImageUrl = req.user.coverImage;
@@ -401,5 +500,9 @@ export {
   updateAccountDetails,
   updateUserAvatar,
   updateUserCoverImage,
-  updateUserProfile
+  updateUserProfile,
+  verifyEmail,
+  resendVerificationEmail,
+  forgotPassword,
+  resetPassword
 };

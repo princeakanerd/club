@@ -7,6 +7,8 @@ import api from "../api/axios";
 import Navbar from "../components/Navbar";
 import InteractiveBackground from "../components/InteractiveBackground";
 import ScrollMessage from "../components/ScrollMessage";
+import CategoryScroll from "../components/CategoryScroll";
+import HowItWorks from "../components/HowItWorks";
 import { getCoverImage, getLogoImage } from "../utils/clubImages";
 
 gsap.registerPlugin(ScrollTrigger, SplitText, useGSAP);
@@ -50,6 +52,27 @@ function HomePage() {
         return () => titleSplit.revert();
     }, { scope: stageRef });
 
+    /* Clip-path image wipes: card covers wipe open in sequence, and the
+       whole rail fades up, once the clubs have loaded. */
+    useGSAP(() => {
+        if (!clubs.length) return;
+        gsap.fromTo(".xcard",
+            { y: 40, opacity: 0 },
+            {
+                y: 0, opacity: 1, duration: 0.7, ease: "power2.out", stagger: 0.08,
+                scrollTrigger: { trigger: railRef.current, start: "top 92%", once: true },
+            }
+        );
+        gsap.fromTo(".xcard__img",
+            { clipPath: "polygon(0 0, 0 0, 0 100%, 0 100%)", scale: 1.25 },
+            {
+                clipPath: "polygon(0 0, 100% 0, 100% 100%, 0 100%)", scale: 1.08,
+                duration: 1.1, ease: "circ.out", stagger: 0.08,
+                scrollTrigger: { trigger: railRef.current, start: "top 92%", once: true },
+            }
+        );
+    }, { scope: stageRef, dependencies: [clubs.length] });
+
     const fetchClubs = async (searchVal = search, categoryVal = category) => {
         setLoading(true);
         try {
@@ -65,7 +88,18 @@ function HomePage() {
         }
     };
 
-    useEffect(() => { fetchClubs(); /* eslint-disable-next-line */ }, []);
+    useEffect(() => {
+        // Pre-filter from ?cat= (set by the category scroll section)
+        const cat = new URLSearchParams(window.location.search).get("cat");
+        if (cat && CATEGORIES.includes(cat)) {
+            setCategory(cat);
+            fetchClubs("", cat);
+            window.scrollTo({ top: 0 });
+        } else {
+            fetchClubs();
+        }
+        /* eslint-disable-next-line */
+    }, []);
 
     /* Track scroll progress + arrow availability */
     const updateScrollState = useCallback(() => {
@@ -321,13 +355,19 @@ function HomePage() {
                 )}
             </section>
 
-            {/* SPYLT-style scroll message */}
+            {/* Scroll message */}
             <ScrollMessage
                 lead="Every great campus story starts the moment you"
                 highlight="show up"
                 tail="and find the people who get you."
                 sub="Clubs, events, late-night builds, and the friendships that outlast the lectures — it all begins with one step inside."
             />
+
+            {/* Pinned horizontal category scroll */}
+            <CategoryScroll />
+
+            {/* Pinned how-it-works scrub */}
+            <HowItWorks />
         </div>
     );
 }

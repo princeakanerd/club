@@ -4,6 +4,7 @@ import { ApiError } from "../utils/ApiError.js";
 import { ApiResponse } from "../utils/ApiResponse.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { uploadOnCloudinary } from "../utils/cloudinary.js";
+import { parsePageQuery, buildPage } from "../utils/pagination.js";
 import mongoose from "mongoose";
 
 const createClub = asyncHandler(async (req, res) => {
@@ -21,19 +22,27 @@ const createClub = asyncHandler(async (req, res) => {
         throw new ApiError(409, "A club with this exact name already exists");
     }
 
-    // 3. Extract and upload files (Multer will provide req.files)
+    // 3. Resolve images — prefer direct-uploaded Cloudinary URLs, else multipart.
+    const logoDirectUrl = typeof req.body.logoUrl === "string" ? req.body.logoUrl.trim() : "";
+    const coverDirectUrl = typeof req.body.coverImageUrl === "string" ? req.body.coverImageUrl.trim() : "";
     const logoLocalPath = req.files?.logo?.[0]?.path;
     const coverImageLocalPath = req.files?.coverImage?.[0]?.path;
 
-    if (!logoLocalPath) {
+    if (!logoDirectUrl && !logoLocalPath) {
         throw new ApiError(400, "Club logo is required to create a club");
     }
 
-    const logo = await uploadOnCloudinary(logoLocalPath);
-    const coverImage = coverImageLocalPath ? await uploadOnCloudinary(coverImageLocalPath) : null;
+    let logoUrl = logoDirectUrl;
+    if (!logoUrl) {
+        const logo = await uploadOnCloudinary(logoLocalPath);
+        if (!logo?.url) throw new ApiError(500, "Failed to upload club logo to cloud storage");
+        logoUrl = logo.url;
+    }
 
-    if (!logo.url) {
-        throw new ApiError(500, "Failed to upload club logo to cloud storage");
+    let coverUrl = coverDirectUrl;
+    if (!coverUrl && coverImageLocalPath) {
+        const coverImage = await uploadOnCloudinary(coverImageLocalPath);
+        coverUrl = coverImage?.url || "";
     }
 
     // 4. Create the Club document
@@ -42,8 +51,8 @@ const createClub = asyncHandler(async (req, res) => {
         description,
         category,
         contactEmail,
-        logo: logo.url,
-        coverImage: coverImage?.url || "",
+        logo: logoUrl,
+        coverImage: coverUrl || "",
         createdBy: req.user._id // Extracted from the verifyJWT middleware
     });
 
@@ -60,6 +69,8 @@ const createClub = asyncHandler(async (req, res) => {
             }
         }
     );
+    // Creator counts as the first member
+    await Club.findByIdAndUpdate(club._id, { $inc: { memberCount: 1 } });
 
     // 6. Return response
     return res.status(201).json(new ApiResponse(201, club, "Club successfully created"));
@@ -79,36 +90,31 @@ const getAllClubs = asyncHandler(async (req, res) => {
     }
 
     if (search) {
-        // Use a regular expression for partial, case-insensitive string matching, options "i" does case insensitive
-        dbQuery.name = { $regex: search, $options: "i" }; 
+        // Match the search term against name, description, OR category so a
+        // user typing "tech" finds the TECHNICAL club even if the word isn't
+        // in its name. Case-insensitive partial match across all three.
+        const term = { $regex: search.trim(), $options: "i" };
+        dbQuery.$or = [
+            { name: term },
+            { description: term },
+            { category: term },
+        ];
     }
 
-    // Use aggregation to include member count
-    const clubs = await Club.aggregate([
-        { $match: dbQuery },
-        {
-            $lookup: {
-                from: "users",
-                let: { clubId: "$_id" },
-                pipeline: [
-                    { $match: { $expr: { $in: ["$$clubId", "$joinedClubs.club"] } } },
-                    { $count: "count" }
-                ],
-                as: "memberData"
-            }
-        },
-        {
-            $addFields: {
-                memberCount: { $ifNull: [{ $arrayElemAt: ["$memberData.count", 0] }, 0] }
-            }
-        },
-        { $unset: "memberData" },
-        { $sort: { createdAt: -1 } }
-    ]);
+    // Cursor pagination (newest-first by _id). memberCount is now stored on
+    // the club doc (kept in sync on join/leave), so no per-club $lookup — this
+    // is a plain indexed find instead of an aggregation with a subquery.
+    const { limit, cursorFilter } = parsePageQuery(req, { defaultLimit: 20 });
+
+    const docs = await Club.find({ ...dbQuery, ...cursorFilter })
+        .sort({ _id: -1 })
+        .limit(limit + 1);
+
+    const { items, meta } = buildPage(docs, limit);
 
     return res
         .status(200)
-        .json(new ApiResponse(200, clubs, "Clubs fetched successfully"));
+        .json(new ApiResponse(200, items, "Clubs fetched successfully", meta));
 });
 
 const getClubProfile = asyncHandler(async (req, res) => {
@@ -129,16 +135,9 @@ const getClubProfile = asyncHandler(async (req, res) => {
             }
         },
         {
-            // Stage 2: Join the users collection to find all members
-            $lookup: {
-                from: "users", 
-                localField: "_id", 
-                foreignField: "joinedClubs.club", 
-                as: "members" 
-            }
-        },
-        {
-            // Stage 3: Join the users collection again to get the creator's details
+            // Stage 2: Join the users collection to get the creator's details.
+            // (We no longer load ALL members just to count them — memberCount
+            // is stored on the club document.)
             $lookup: {
                 from: "users",
                 localField: "createdBy",
@@ -147,13 +146,10 @@ const getClubProfile = asyncHandler(async (req, res) => {
             }
         },
         {
-            // Stage 4: Compute data and restructure arrays
+            // Stage 3: Restructure the creator array into a single object
             $addFields: {
-                memberCount: {
-                    $size: "$members" 
-                },
                 createdBy: {
-                    $first: "$creatorDetails" 
+                    $first: "$creatorDetails"
                 }
             }
         },
@@ -167,6 +163,7 @@ const getClubProfile = asyncHandler(async (req, res) => {
                 coverImage: 1,
                 contactEmail: 1,
                 isAcceptingMembers: 1,
+                requiresApproval: 1,
                 memberCount: 1,
                 createdAt: 1,
                 "createdBy.fullName": 1,
@@ -233,6 +230,8 @@ const joinClub = asyncHandler(async (req, res) => {
         { new: true } // Returns the newly updated document instead of the old one
     ).select("-password -refreshToken"); // Strip sensitive data
 
+    await Club.findByIdAndUpdate(clubId, { $inc: { memberCount: 1 } });
+
     // 5. Return success response
     return res
         .status(200)
@@ -279,6 +278,12 @@ const leaveClub = asyncHandler(async (req, res) => {
         },
         { new: true }
     ).select("-password -refreshToken");
+
+    // Decrement but never below 0
+    await Club.updateOne(
+        { _id: clubId, memberCount: { $gt: 0 } },
+        { $inc: { memberCount: -1 } }
+    );
 
     // 6. Return the updated user object
     return res
@@ -356,7 +361,7 @@ const updateClubDetails = asyncHandler(async (req, res) => {
         throw new ApiError(400, "Invalid Club ID format");
     }
 
-    const { name, description, contactEmail, isAcceptingMembers } = req.body;
+    const { name, description, contactEmail, isAcceptingMembers, requiresApproval } = req.body;
 
     const club = await Club.findById(clubId);
     if (!club) throw new ApiError(404, "Club not found");
@@ -374,12 +379,18 @@ const updateClubDetails = asyncHandler(async (req, res) => {
     if (description) updateFields.description = description;
     if (contactEmail !== undefined) updateFields.contactEmail = contactEmail;
     if (isAcceptingMembers !== undefined) updateFields.isAcceptingMembers = isAcceptingMembers;
+    if (requiresApproval !== undefined) updateFields.requiresApproval = requiresApproval;
 
-    if (logoLocalPath) {
+    // Direct-uploaded URLs take precedence over legacy multipart files.
+    if (typeof req.body.logoUrl === "string" && req.body.logoUrl.trim()) {
+        updateFields.logo = req.body.logoUrl.trim();
+    } else if (logoLocalPath) {
         const uploaded = await uploadOnCloudinary(logoLocalPath);
         if (uploaded?.url) updateFields.logo = uploaded.url;
     }
-    if (coverLocalPath) {
+    if (typeof req.body.coverImageUrl === "string" && req.body.coverImageUrl.trim()) {
+        updateFields.coverImage = req.body.coverImageUrl.trim();
+    } else if (coverLocalPath) {
         const uploaded = await uploadOnCloudinary(coverLocalPath);
         if (uploaded?.url) updateFields.coverImage = uploaded.url;
     }
@@ -476,9 +487,17 @@ const removeMember = asyncHandler(async (req, res) => {
     if (memberId === req.user._id.toString())
         throw new ApiError(400, "You cannot remove yourself");
 
-    await User.findByIdAndUpdate(memberId, {
-        $pull: { joinedClubs: { club: clubId } }
-    });
+    const result = await User.updateOne(
+        { _id: memberId, "joinedClubs.club": clubId },
+        { $pull: { joinedClubs: { club: clubId } } }
+    );
+    // Only decrement if the user was actually a member (avoids drift on retries)
+    if (result.modifiedCount > 0) {
+        await Club.updateOne(
+            { _id: clubId, memberCount: { $gt: 0 } },
+            { $inc: { memberCount: -1 } }
+        );
+    }
     return res.status(200).json(new ApiResponse(200, {}, "Member removed"));
 });
 

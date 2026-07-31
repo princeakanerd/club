@@ -6,7 +6,20 @@ import { ApiError } from "../utils/ApiError.js";
 import { ApiResponse } from "../utils/ApiResponse.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { uploadOnCloudinary } from "../utils/cloudinary.js";
+import { buildEventICS } from "../utils/ics.js";
 import mongoose from "mongoose";
+import crypto from "crypto";
+import QRCode from "qrcode";
+
+/* Lazily create a check-in code for an event the first time the LEAD asks
+   for the QR. Returns the raw code. */
+const ensureCheckInCode = async (event) => {
+    if (!event.checkInCode) {
+        event.checkInCode = crypto.randomBytes(8).toString("hex");
+        await event.save({ validateBeforeSave: false });
+    }
+    return event.checkInCode;
+};
 
 const createEvent = asyncHandler(async (req, res) => {
     // 1. Extract the text payload from the request body
@@ -35,16 +48,31 @@ const createEvent = asyncHandler(async (req, res) => {
     }
 
     // 3. Extract and upload banner image
+    // Prefer a direct-uploaded Cloudinary URL; fall back to a multipart file.
+    const bannerDirectUrl = typeof req.body.bannerImageUrl === "string" ? req.body.bannerImageUrl.trim() : "";
     const bannerLocalPath = req.files?.bannerImage?.[0]?.path;
-    if (!bannerLocalPath) throw new ApiError(400, "Event banner image is required");
+    if (!bannerDirectUrl && !bannerLocalPath) throw new ApiError(400, "Event banner image is required");
 
-    const bannerImage = await uploadOnCloudinary(bannerLocalPath);
-    if (!bannerImage?.url) throw new ApiError(500, "Failed to upload the banner image to cloud storage");
+    let bannerUrl = bannerDirectUrl;
+    if (!bannerUrl) {
+        const bannerImage = await uploadOnCloudinary(bannerLocalPath);
+        if (!bannerImage?.url) throw new ApiError(500, "Failed to upload the banner image to cloud storage");
+        bannerUrl = bannerImage.url;
+    }
 
-    // Upload past images (last year's photos) — optional, up to 6
+    // Past images: accept an array of direct URLs (pastImageUrls) and/or legacy files
+    let pastImages = [];
+    if (req.body.pastImageUrls) {
+        try {
+            const arr = typeof req.body.pastImageUrls === "string" ? JSON.parse(req.body.pastImageUrls) : req.body.pastImageUrls;
+            if (Array.isArray(arr)) pastImages = arr.filter((u) => typeof u === "string");
+        } catch { /* ignore malformed */ }
+    }
     const pastLocalPaths = (req.files?.pastImages || []).map(f => f.path);
-    const pastUploads = await Promise.all(pastLocalPaths.map(p => uploadOnCloudinary(p)));
-    const pastImages = pastUploads.filter(u => u?.url).map(u => u.url);
+    if (pastLocalPaths.length) {
+        const pastUploads = await Promise.all(pastLocalPaths.map(p => uploadOnCloudinary(p)));
+        pastImages = pastImages.concat(pastUploads.filter(u => u?.url).map(u => u.url));
+    }
 
     // 4. Create the Event Document
     const event = await Event.create({
@@ -52,7 +80,7 @@ const createEvent = asyncHandler(async (req, res) => {
         description,
         eventDate,
         venue,
-        bannerImage: bannerImage.url,
+        bannerImage: bannerUrl,
         pastImages,
         isPublished: isPublished === undefined ? true : isPublished,
         hostedBy,
@@ -262,15 +290,149 @@ const getMyUpcomingEvents = asyncHandler(async (req, res) => {
         .json(new ApiResponse(200, upcomingEvents, "User's upcoming events fetched successfully"));
 });
 
+/* ── GET /events/:eventId/checkin-code  (LEAD only) ──
+   Returns the raw check-in code plus a QR data-URL the lead can display at
+   the door. Attendees scan it to self-check-in. */
+const getCheckInCode = asyncHandler(async (req, res) => {
+    const { eventId } = req.params;
+    if (!mongoose.isValidObjectId(eventId)) throw new ApiError(400, "Invalid Event ID format");
+
+    // checkInCode is select:false, so explicitly include it
+    const event = await Event.findById(eventId).select("+checkInCode createdBy title");
+    if (!event) throw new ApiError(404, "Event not found");
+    if (event.createdBy.toString() !== req.user._id.toString())
+        throw new ApiError(403, "Only the event creator can access the check-in code");
+
+    const code = await ensureCheckInCode(event);
+    // The QR encodes a payload the scanner app posts back to /checkin
+    const payload = JSON.stringify({ eventId: event._id, code });
+    const qrDataUrl = await QRCode.toDataURL(payload);
+
+    return res
+        .status(200)
+        .json(new ApiResponse(200, { code, qrDataUrl }, "Check-in code generated"));
+});
+
+/* ── POST /events/:eventId/checkin-code/regenerate  (LEAD only) ──
+   Rotate the code (invalidates any previously shared QR). */
+const regenerateCheckInCode = asyncHandler(async (req, res) => {
+    const { eventId } = req.params;
+    if (!mongoose.isValidObjectId(eventId)) throw new ApiError(400, "Invalid Event ID format");
+
+    const event = await Event.findById(eventId).select("+checkInCode createdBy");
+    if (!event) throw new ApiError(404, "Event not found");
+    if (event.createdBy.toString() !== req.user._id.toString())
+        throw new ApiError(403, "Only the event creator can regenerate the check-in code");
+
+    event.checkInCode = crypto.randomBytes(8).toString("hex");
+    await event.save({ validateBeforeSave: false });
+
+    return res.status(200).json(new ApiResponse(200, { code: event.checkInCode }, "Check-in code rotated"));
+});
+
+/* ── POST /events/:eventId/checkin  { code }  (attendee self check-in) ──
+   Marks the logged-in user present if the code matches and we're within the
+   check-in window (from 1h before start to 4h after). Auto-RSVPs the user as
+   GOING if they hadn't RSVP'd. */
+const checkInToEvent = asyncHandler(async (req, res) => {
+    const { eventId } = req.params;
+    const { code } = req.body;
+    if (!mongoose.isValidObjectId(eventId)) throw new ApiError(400, "Invalid Event ID format");
+    if (!code) throw new ApiError(400, "Check-in code is required");
+
+    const event = await Event.findById(eventId).select("+checkInCode");
+    if (!event) throw new ApiError(404, "Event not found");
+    if (!event.checkInCode || event.checkInCode !== code)
+        throw new ApiError(400, "Invalid check-in code");
+
+    // Time window guard
+    const now = Date.now();
+    const start = new Date(event.eventDate).getTime();
+    if (now < start - 60 * 60 * 1000)
+        throw new ApiError(400, "Check-in isn't open yet — it opens 1 hour before the event");
+    if (now > start + 4 * 60 * 60 * 1000)
+        throw new ApiError(400, "Check-in for this event has closed");
+
+    const idx = event.rsvp.findIndex((r) => r.user.toString() === req.user._id.toString());
+    if (idx > -1) {
+        if (event.rsvp[idx].attended)
+            throw new ApiError(400, "You're already checked in");
+        event.rsvp[idx].attended = true;
+        event.rsvp[idx].checkedInAt = new Date();
+        if (event.rsvp[idx].status === "NOT_GOING") event.rsvp[idx].status = "GOING";
+    } else {
+        // Walk-in: create an RSVP and mark attended
+        event.rsvp.push({
+            user: req.user._id,
+            status: "GOING",
+            attended: true,
+            checkedInAt: new Date(),
+        });
+    }
+    await event.save();
+
+    return res.status(200).json(new ApiResponse(200, { attended: true }, "Checked in — enjoy the event!"));
+});
+
+/* ── PATCH /events/:eventId/attendees/:userId/attendance  { attended }  (LEAD) ──
+   Manual override so a lead can mark someone present/absent without the QR. */
+const setAttendance = asyncHandler(async (req, res) => {
+    const { eventId, userId } = req.params;
+    const { attended } = req.body;
+    if (!mongoose.isValidObjectId(eventId) || !mongoose.isValidObjectId(userId))
+        throw new ApiError(400, "Invalid ID format");
+    if (typeof attended !== "boolean")
+        throw new ApiError(400, "`attended` must be a boolean");
+
+    const event = await Event.findById(eventId);
+    if (!event) throw new ApiError(404, "Event not found");
+    if (event.createdBy.toString() !== req.user._id.toString())
+        throw new ApiError(403, "Only the event creator can mark attendance");
+
+    const idx = event.rsvp.findIndex((r) => r.user.toString() === userId);
+    if (idx === -1) {
+        // Lead marking a walk-in who never RSVP'd
+        event.rsvp.push({ user: userId, status: "GOING", attended, checkedInAt: attended ? new Date() : undefined });
+    } else {
+        event.rsvp[idx].attended = attended;
+        event.rsvp[idx].checkedInAt = attended ? new Date() : undefined;
+    }
+    await event.save();
+
+    return res.status(200).json(new ApiResponse(200, {}, `Attendance ${attended ? "marked" : "cleared"}`));
+});
+
+/* ── GET /events/:eventId/calendar.ics  (public) ──
+   Download the event as an iCalendar file for Google/Apple/Outlook. */
+const downloadEventICS = asyncHandler(async (req, res) => {
+    const { eventId } = req.params;
+    if (!mongoose.isValidObjectId(eventId)) throw new ApiError(400, "Invalid Event ID format");
+
+    const event = await Event.findById(eventId).select("title description venue eventDate");
+    if (!event) throw new ApiError(404, "Event not found");
+
+    const ics = buildEventICS(event);
+    const filename = `${(event.title || "event").replace(/[^a-z0-9]+/gi, "-").toLowerCase()}.ics`;
+
+    res.setHeader("Content-Type", "text/calendar; charset=utf-8");
+    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+    return res.status(200).send(ics);
+});
+
 // Update the exports list at the bottom:
-export { 
-    createEvent, 
-    getClubEvents, 
-    rsvpToEvent, 
-    getEventAttendees, 
-    updateEventDetails, 
+export {
+    createEvent,
+    getClubEvents,
+    rsvpToEvent,
+    getEventAttendees,
+    updateEventDetails,
     deleteEvent,
-    getMyUpcomingEvents 
+    getMyUpcomingEvents,
+    getCheckInCode,
+    regenerateCheckInCode,
+    checkInToEvent,
+    setAttendance,
+    downloadEventICS
 };
 
 

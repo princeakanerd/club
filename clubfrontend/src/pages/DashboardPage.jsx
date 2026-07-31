@@ -73,7 +73,12 @@ function DashboardPage() {
 
     const heroRef = useRef(null);
 
-    // SPYLT-style hero: char-by-char greeting rise + stat panel slide-in
+    const clubCount = user?.joinedClubs?.length || 0;
+    const connectionCount = (user?.connections || []).filter(c => c.status === "ACCEPTED").length;
+    const hasClubs = clubCount > 0;
+    const firstName = user?.fullName?.split(" ")[0];
+
+    // SPYLT-style hero: char-by-char greeting rise + stat panel slide-in + count-up
     useGSAP(() => {
         if (!user) return;
         const split = new SplitText(".dash-greeting", { type: "chars" });
@@ -81,15 +86,24 @@ function DashboardPage() {
         tl.from(split.chars, { yPercent: 140, opacity: 0, stagger: 0.02, ease: "power3.out", duration: 0.8 })
             .from(".dash-hero .chip-rust, .dash-sub, .dash-cta", { opacity: 0, y: 20, stagger: 0.1, ease: "power2.out", duration: 0.5 }, "-=0.5")
             .from(".dash-stats", { opacity: 0, x: 40, ease: "power2.out", duration: 0.6 }, "-=0.6");
+
+        // Count-up the stat numbers when the panel scrolls into view
+        gsap.utils.toArray(".dash-stat-num").forEach((el) => {
+            const end = Number(el.dataset.value) || 0;
+            const obj = { v: 0 };
+            gsap.to(obj, {
+                v: end,
+                duration: 1.4,
+                ease: "power2.out",
+                scrollTrigger: { trigger: el, start: "top 92%", once: true },
+                onUpdate: () => { el.textContent = String(Math.round(obj.v)).padStart(2, "0"); },
+            });
+        });
+
         return () => split.revert();
-    }, { scope: heroRef, dependencies: [!!user] });
+    }, { scope: heroRef, dependencies: [!!user, clubCount, connectionCount, upcoming.length] });
 
     if (!user) return null;
-
-    const clubCount = user.joinedClubs?.length || 0;
-    const connectionCount = (user.connections || []).filter(c => c.status === "ACCEPTED").length;
-    const hasClubs = clubCount > 0;
-    const firstName = user.fullName?.split(" ")[0];
 
     const STATS = [
         { value: clubCount, label: "Clubs joined" },
@@ -130,7 +144,7 @@ function DashboardPage() {
                         <p style={{ fontSize: 11.5, letterSpacing: "0.22em", color: "var(--rust)", margin: "0 0 4px", fontWeight: 700 }}>AT A GLANCE</p>
                         {STATS.map((s) => (
                             <div key={s.label} className="dash-stat">
-                                <div style={{ fontFamily: "var(--serif)", fontSize: 46, color: "var(--ivory)", lineHeight: 1, letterSpacing: "-0.02em" }}>
+                                <div className="dash-stat-num" data-value={s.value} style={{ fontFamily: "var(--serif)", fontSize: 46, color: "var(--ivory)", lineHeight: 1, letterSpacing: "-0.02em" }}>
                                     {String(s.value).padStart(2, "0")}
                                 </div>
                                 <div style={{ fontSize: 12, letterSpacing: "0.14em", textTransform: "uppercase", color: "var(--muted)", fontWeight: 600, textAlign: "right" }}>
