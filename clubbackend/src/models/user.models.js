@@ -110,6 +110,13 @@ const userSchema = new Schema(
             type : Date,
             select : false,
         },
+        // Expo push tokens (one per device the user is signed in on). We push
+        // to all of them when a notification is created for this user.
+        pushTokens : [
+            {
+                type : String,
+            }
+        ],
 
     }, {
         timestamps : true

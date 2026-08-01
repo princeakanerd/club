@@ -490,6 +490,25 @@ const updateUserProfile = asyncHandler(async (req, res) => {
     return res.status(200).json(new ApiResponse(200, user, "Profile updated"));
 });
 
+/* POST /users/push-token { token } — register this device's Expo push token
+   (idempotent via $addToSet). Called by the mobile app after login. */
+const registerPushToken = asyncHandler(async (req, res) => {
+    const { token } = req.body;
+    if (!token || !token.startsWith("ExponentPushToken[")) {
+        throw new ApiError(400, "A valid Expo push token is required");
+    }
+    await User.findByIdAndUpdate(req.user._id, { $addToSet: { pushTokens: token } });
+    return res.status(200).json(new ApiResponse(200, {}, "Push token registered"));
+});
+
+/* DELETE /users/push-token { token } — unregister on logout / disable. */
+const unregisterPushToken = asyncHandler(async (req, res) => {
+    const { token } = req.body;
+    if (!token) throw new ApiError(400, "Token is required");
+    await User.findByIdAndUpdate(req.user._id, { $pull: { pushTokens: token } });
+    return res.status(200).json(new ApiResponse(200, {}, "Push token removed"));
+});
+
 export {
   loginUser,
   registerUser,
@@ -504,5 +523,7 @@ export {
   verifyEmail,
   resendVerificationEmail,
   forgotPassword,
-  resetPassword
+  resetPassword,
+  registerPushToken,
+  unregisterPushToken
 };

@@ -57,4 +57,33 @@ const notificationSchema = new Schema(
 // covers both (and supersedes the single-field recipient index).
 notificationSchema.index({ recipient: 1, isRead: 1, createdAt: -1 });
 
+/* Fire a push notification whenever an in-app notification is created — for
+   BOTH Notification.create() (post 'save') and Notification.insertMany()
+   (post 'insertMany'). Centralizing here means every existing call site gets
+   push for free, with no changes to controllers. Push is dynamically imported
+   to avoid a circular dependency (push util imports the User model). */
+async function pushFor(doc) {
+    if (!doc?.recipient || !doc?.message) return;
+    const { sendPushToUser } = await import("../utils/push.js");
+    sendPushToUser(doc.recipient, {
+        title: "Club App",
+        body: doc.message,
+        data: {
+            type: doc.type,
+            notificationId: String(doc._id),
+            clubId: doc.relatedClub ? String(doc.relatedClub) : undefined,
+            eventId: doc.relatedEvent ? String(doc.relatedEvent) : undefined,
+            postId: doc.relatedPost ? String(doc.relatedPost) : undefined,
+            userId: doc.relatedUser ? String(doc.relatedUser) : undefined,
+        },
+    });
+}
+
+notificationSchema.post("save", function (doc) {
+    pushFor(doc);
+});
+notificationSchema.post("insertMany", function (docs) {
+    (docs || []).forEach((d) => pushFor(d));
+});
+
 export const Notification = mongoose.model("Notification", notificationSchema);

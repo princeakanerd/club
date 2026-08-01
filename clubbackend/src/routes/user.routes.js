@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { upload } from "../middlewares/multer.middleware.js"
-import { loginUser, registerUser, logoutUser, changeCurrentPassword, getCurrentUser, updateAccountDetails, updateUserAvatar, updateUserCoverImage, updateUserProfile, refreshAccessToken, verifyEmail, resendVerificationEmail, forgotPassword, resetPassword } from "../controllers/user.controller.js";
+import { loginUser, registerUser, logoutUser, changeCurrentPassword, getCurrentUser, updateAccountDetails, updateUserAvatar, updateUserCoverImage, updateUserProfile, refreshAccessToken, verifyEmail, resendVerificationEmail, forgotPassword, resetPassword, registerPushToken, unregisterPushToken } from "../controllers/user.controller.js";
 import { verifyJWT } from "../middlewares/auth.middleware.js";
 import { validate } from "../middlewares/validate.middleware.js";
 import { authLimiter } from "../middlewares/rateLimit.middleware.js";
@@ -40,6 +40,8 @@ router.route("/reset-password").post(authLimiter, validate(resetPasswordSchema),
 
 //Protected Routes
 router.route("/logout").post(verifyJWT, logoutUser);
+// Expo push token register/unregister (mobile)
+router.route("/push-token").post(verifyJWT, registerPushToken).delete(verifyJWT, unregisterPushToken);
 router.route("/change-password").post(verifyJWT, validate(changePasswordSchema), changeCurrentPassword);
 router.route("/current-user").get(verifyJWT, getCurrentUser);
 router.route("/update-account").patch(verifyJWT, updateAccountDetails);
